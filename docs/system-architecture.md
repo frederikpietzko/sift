@@ -9,7 +9,7 @@ Sift is an Open Source Agentic Code Review Platform designed for self-hosting an
 - **Clients** (Sift VSCode, Sift IJ Plugin, Sift Web UI, and possibly a Coding Agent) let users manage reviews and see results. They talk to the **Sift Server** (partly via **MCP**).
 - The **Sift Server** persists agent sessions and results in **Postgres** and applies Custom Resources (CRs) via the **k8s API**.
 - The **Sift Operator** watches the k8s API and schedules, monitors & updates jobs — spawning **reviewer** and **security scanner** agent jobs.
-- Agents publish their results to a **message queue (Some MQ)**; the Sift Server consumes results and status updates from it.
+- Agents publish their results to **RabbitMQ** (see [ADR 0001](adrs/0001-use-rabbitmq-as-message-queue.md)); the Sift Server consumes results and status updates from it.
 - The **VCS Adapter** integrates with **GitHub**, **GitLab**, and **CodeBerg**: it gets PRs & responses, posts comments, and publishes events (PR created, comment on PR thread) to the MQ.
 
 ## Mermaid Diagram
@@ -36,7 +36,7 @@ graph TB
         operator["Sift Operator<br/>Schedules, Monitors & Updates Jobs"]
         reviewer["reviewer"]
         security["Security Scanner"]
-        mq["Some MQ"]
+        mq["RabbitMQ"]
         vcs["VCS Adapter"]
     end
 
@@ -82,6 +82,6 @@ graph TB
 | Sift Operator | Watches CRs; schedules, monitors & updates agent jobs |
 | reviewer | Code review agent job; publishes results to the MQ |
 | Security Scanner | Security review agent job; publishes results to the MQ |
-| Some MQ | Message queue transporting agent results, status updates, and VCS events |
+| RabbitMQ | Message queue transporting agent results, status updates, and VCS events (integrated via Spring AMQP, see [ADR 0001](adrs/0001-use-rabbitmq-as-message-queue.md)) |
 | VCS Adapter | Integration with VCS providers: fetches PRs & responses, posts comments, emits PR/thread events |
 | GitHub / GitLab / CodeBerg | Supported VCS providers |
