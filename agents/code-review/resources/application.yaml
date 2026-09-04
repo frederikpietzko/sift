@@ -1,0 +1,9 @@
+spring:
+  main:
+    web-application-type: none
+  ai:
+    openai:
+      base-url: "${OPENAI_BASE_URL}"
+      api-key: "${OPENAI_API_KEY}"
+      chat:
+        model: gpt-5.6-luna

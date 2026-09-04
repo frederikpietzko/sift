@@ -1,0 +1,9 @@
+product: jvm/lib
+apply:
+  - //config/detekt.module-template.yaml
+  - //config/spring.module-template.yaml
+
+dependencies:
+  - $spring.boot.starter
+  - bom: $libs.spring.ai.bom
+  - $libs.spring.ai.openai.starter

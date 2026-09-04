@@ -1,0 +1,15 @@
+product: jvm/app
+apply:
+  - //config/detekt.module-template.yaml
+  - //config/spring.module-template.yaml
+
+settings:
+  jvm:
+    mainClass: org.sift.agents.review.MainKt
+
+
+dependencies:
+  - $spring.boot.starter
+  - bom: $libs.spring.ai.bom
+  - $libs.spring.ai.openai.starter
+  - //agents/shared

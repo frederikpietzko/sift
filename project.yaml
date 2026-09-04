@@ -1,4 +1,6 @@
 modules:
+  - agents/code-review
+  - agents/shared
   - build-config/crd-generator
   - build-config/detekt
   - k8s/crds

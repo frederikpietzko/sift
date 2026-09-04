@@ -1,8 +1,10 @@
 [versions]
 fabrics8 = "7.8.0"
 spring-operator-starter = "6.6.0"
+spring-ai-bom = "2.0.1"
 
 [libraries]
+spring-ai-bom = { module = "org.springframework.ai:spring-ai-bom", version.ref = "spring-ai-bom" }
 spring-operator-framework = { module = "io.javaoperatorsdk:operator-framework-spring-boot-starter", version.ref = "spring-operator-starter" }
 spring-operator-framework-test = { module = "io.javaoperatorsdk:operator-framework-spring-boot-starter-test", version.ref = "spring-operator-starter" }
 operator-framework = { module = "io.javaoperatorsdk:operator-framework" }
