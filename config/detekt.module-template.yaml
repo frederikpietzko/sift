@@ -1,0 +1,8 @@
+apply:
+  - //config/common.module-template.yaml
+
+plugins:
+  detekt:
+    enabled: true
+    configFile: detekt-rules.yaml
+    buildUponDefaultConfig: true

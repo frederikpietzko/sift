@@ -1,0 +1,7 @@
+product: jvm/amper-plugin
+apply:
+  - //config/common.module-template.yaml
+
+dependencies:
+  - $libs.fabrics.crd.generator.api
+  - $libs.fabrics.generator.collector

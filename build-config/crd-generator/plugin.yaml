@@ -1,0 +1,9 @@
+tasks:
+  generateCrds:
+    action: !org.sift.crds.generateCrds
+      compilationArtifact: ${module.jar}
+      compileClasspath: ${module.compileClasspath}
+      outputDir: ${module.rootDir}/../manifests/crds
+
+commands:
+  - generateCrds

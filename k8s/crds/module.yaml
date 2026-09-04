@@ -1,0 +1,15 @@
+product: jvm/lib
+apply:
+  - //config/detekt.module-template.yaml
+settings:
+  kotlin:
+    noArg:
+      enabled: true
+      annotations:
+        - org.sift.crds.utils.NoArg
+plugins:
+  crd-generator:
+    enabled: true
+
+dependencies:
+  - $libs.fabrics.generator.apt

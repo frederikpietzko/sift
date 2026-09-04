@@ -1,0 +1,19 @@
+[versions]
+fabrics8 = "7.8.0"
+spring-operator-starter = "6.6.0"
+
+[libraries]
+spring-operator-framework = { module = "io.javaoperatorsdk:operator-framework-spring-boot-starter", version.ref = "spring-operator-starter" }
+spring-operator-framework-test = { module = "io.javaoperatorsdk:operator-framework-spring-boot-starter-test", version.ref = "spring-operator-starter" }
+operator-framework = { module = "io.javaoperatorsdk:operator-framework" }
+operator-framework-junit = { module = "io.javaoperatorsdk:operator-framework-junit" }
+fabrics-generator-apt = { module = "io.fabric8:crd-generator-apt", version.ref = "fabrics8" }
+fabrics8-kubernetes-client = { module = "io.fabric8:kubernetes-client", version.ref = "fabrics8" }
+fabrics-crd-generator-api = { module = "io.fabric8:crd-generator-api-v2", version.ref = "fabrics8" }
+fabrics-generator-collector = { module = "io.fabric8:crd-generator-collector", version.ref = "fabrics8" }
+
+spring-ai-ollama-starter = { module = "org.springframework.ai:spring-ai-starter-model-ollama" }
+spring-ai-openai-starter = { module = "org.springframework.ai:spring-ai-starter-model-openai" }
+jackson-module-kotlin = { module = "tools.jackson.module:jackson-module-kotlin" }
+jackson-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml" }
+spring-ai-community-agent-utils = { module = "org.springaicommunity:spring-ai-agent-utils", version = "0.10.0" }

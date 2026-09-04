@@ -1,0 +1,11 @@
+product: jvm/amper-plugin
+
+description: A plugin to run the Detekt linter.
+
+apply:
+  - //config/common.module-template.yaml
+
+pluginInfo:
+  settingsClass: org.sift.plugins.detekt.Settings
+
+# No hard dependency on Detekt itself — resolved dynamically via Classpath in plugin.yaml

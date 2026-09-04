@@ -1,0 +1,9 @@
+modules:
+  - build-config/crd-generator
+  - build-config/detekt
+  - k8s/crds
+  - server
+
+plugins:
+  - //build-config/crd-generator
+  - //build-config/detekt
