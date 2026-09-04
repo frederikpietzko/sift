@@ -1,0 +1,13 @@
+product: jvm/app
+
+settings:
+  springBoot: enabled
+  jvm:
+    mainClass: org.jetbrains.amper.spring.MainKt
+
+dependencies:
+  - $kotlin.reflect
+  - $spring.boot.starter
+
+test-dependencies:
+  - $spring.boot.starter.test
