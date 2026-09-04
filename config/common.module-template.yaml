@@ -21,7 +21,7 @@ test-settings:
   kotlin:
     powerAssert: enabled
     freeCompilerArgs:
-      - -Wallow-returns-result-of
+      - -Xallow-returns-result-of
 
 
 
