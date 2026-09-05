@@ -16,6 +16,9 @@ fabrics-generator-collector = { module = "io.fabric8:crd-generator-collector", v
 
 spring-ai-ollama-starter = { module = "org.springframework.ai:spring-ai-starter-model-ollama" }
 spring-ai-openai-starter = { module = "org.springframework.ai:spring-ai-starter-model-openai" }
+jackson-annotations = { module = "com.fasterxml.jackson.core:jackson-annotations", version = "2.20" }
 jackson-module-kotlin = { module = "tools.jackson.module:jackson-module-kotlin" }
 jackson-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml" }
 spring-ai-community-agent-utils = { module = "org.springaicommunity:spring-ai-agent-utils", version = "0.10.0" }
+mockk = { module = "io.mockk:mockk", version = "1.14.6" }
+springmockk = { module = "com.ninja-squad:springmockk", version = "4.0.2" }

@@ -12,4 +12,12 @@ dependencies:
   - $spring.boot.starter
   - bom: $libs.spring.ai.bom
   - $libs.spring.ai.openai.starter
+  - $libs.spring.ai.community.agent.utils
+  - $libs.jackson.module.kotlin
   - //agents/shared
+  - //events
+
+test-dependencies:
+  - $spring.boot.starter.test
+  - $libs.mockk
+  - $libs.springmockk

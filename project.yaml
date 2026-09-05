@@ -3,6 +3,7 @@ modules:
   - agents/shared
   - build-config/crd-generator
   - build-config/detekt
+  - events
   - k8s/crds
   - server
 

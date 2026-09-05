@@ -1,0 +1,10 @@
+use_default_settings: true
+
+server:
+  # Placeholder secret for local development only — replace for any real deployment.
+  secret_key: "sift-local-dev-secret"
+
+search:
+  formats:
+    - html
+    - json

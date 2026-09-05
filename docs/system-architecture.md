@@ -10,6 +10,11 @@ Sift is an Open Source Agentic Code Review Platform designed for self-hosting an
 - The **Sift Server** persists agent sessions and results in **Postgres** and applies Custom Resources (CRs) via the **k8s API**.
 - The **Sift Operator** watches the k8s API and schedules, monitors & updates jobs — spawning **reviewer** and **security scanner** agent jobs.
 - Agents publish their results to **RabbitMQ** (see [ADR 0001](adrs/0001-use-rabbitmq-as-message-queue.md)); the Sift Server consumes results and status updates from it.
+  - Event payloads (e.g. `CodeReviewCompletedEvent`) are defined in the shared **`events`** module, so producers (agents) and the consumer (Sift Server) share one contract.
+  - **`agents/shared`** provides the messaging abstraction (`EventPublisher` backed by RabbitMQ, publishing to the `sift.events` topic exchange) and shared agent tools, including the default-enabled **SearXNG** web-search tool (see [ADR 0002](adrs/0002-airgapped-agents-with-optional-searxng-web-search.md)). Operators configure their self-hosted SearXNG endpoint or explicitly disable search with `sift.tools.web-search.enabled=false`. Network isolation requires deployment-level controls; the tool setting does not enforce an airgap.
+  - Shared messaging and web-search beans are discovered through Spring Boot auto-configuration; agents do not need to scan or import shared packages. Defaults back off for application-provided beans (see [ADR 0003](adrs/0003-auto-configure-shared-agent-infrastructure.md)).
+  - The code-review agent explicitly closes its Spring context after its one-shot runner completes, releasing RabbitMQ resources so the job can exit (see [ADR 0004](adrs/0004-close-one-shot-agent-context.md)).
+  - For local development, RabbitMQ, Postgres, and SearXNG run via [docker-compose](../compose.yaml).
 - The **VCS Adapter** integrates with **GitHub**, **GitLab**, and **CodeBerg**: it gets PRs & responses, posts comments, and publishes events (PR created, comment on PR thread) to the MQ.
 
 ## Mermaid Diagram
@@ -80,8 +85,11 @@ graph TB
 | Postgres | Stores agent sessions, results, etc. |
 | k8s API | Kubernetes API server; receives CRs from Sift Server, watched by the operator |
 | Sift Operator | Watches CRs; schedules, monitors & updates agent jobs |
-| reviewer | Code review agent job; publishes results to the MQ |
+| reviewer | Code review agent job; publishes results to the MQ (see [code-review-agent](system-components/code-review-agent.md)) |
 | Security Scanner | Security review agent job; publishes results to the MQ |
 | RabbitMQ | Message queue transporting agent results, status updates, and VCS events (integrated via Spring AMQP, see [ADR 0001](adrs/0001-use-rabbitmq-as-message-queue.md)) |
 | VCS Adapter | Integration with VCS providers: fetches PRs & responses, posts comments, emits PR/thread events |
 | GitHub / GitLab / CodeBerg | Supported VCS providers |
+| events (module) | Shared event contracts (`SiftEvent`, `CodeReviewCompletedEvent`, …) used by agents and the Sift Server |
+| agents/shared (module) | Shared agent infrastructure: `EventPublisher` (RabbitMQ, `sift.events` exchange) and tools such as the optional SearXNG web search |
+| SearXNG | Self-hosted metasearch engine backing the default-enabled agent web-search tool; part of the local compose stack (see [ADR 0002](adrs/0002-airgapped-agents-with-optional-searxng-web-search.md)) |

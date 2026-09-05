@@ -1,9 +1,22 @@
 spring:
   main:
     web-application-type: none
+  rabbitmq:
+    connection-timeout: 5s
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1s
+        multiplier: 2.0
+        max-retries: 3
   ai:
     openai:
       base-url: "${OPENAI_BASE_URL}"
       api-key: "${OPENAI_API_KEY}"
       chat:
         model: gpt-5.6-luna
+        reasoning-effort: none
+
+logging:
+  level:
+    org.springframework.ai: DEBUG

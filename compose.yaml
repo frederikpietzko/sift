@@ -33,6 +33,16 @@ services:
       timeout: 5s
       retries: 10
 
+  searxng:
+    image: searxng/searxng
+    container_name: sift-searxng
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888/
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+
 volumes:
   postgres-data:
   rabbitmq-data:
