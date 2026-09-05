@@ -19,8 +19,9 @@ The `ReviewRunner` (`ApplicationRunner`) orchestrates a single run:
    temporary directory, fetches the base branch and the branch under review, and computes the
    diff (`baseBranch...branch`). Fails with `GitCommandException` on any git error or timeout.
 2. **Review** — `ReviewAgent.review(checkout)` sends the (capped) diff to the LLM together with
-   shell, grep, glob, and file-system tools scoped to the checkout directory, plus the optional
-   SearXNG web-search tool (enabled by default). The call is retried once on failure and returns a
+   shell, grep, glob, and file-system tools, plus the optional SearXNG web-search tool (enabled
+   by default). A shared advisor checks only shell commands before execution; shell commands
+   are denied by default, while non-shell tools pass through. The call is retried once on failure and returns a
    structured `ReviewResult` (summary + findings).
 3. **Publish** — the result is mapped to a `CodeReviewCompletedEvent` and published via the
    shared `EventPublisher` under the routing key `code-review.completed` to the `sift.events`
@@ -48,6 +49,39 @@ exchange. Connection settings still come from application configuration and prof
 | `sift.review.base-branch` | Base branch to diff against |
 | `sift.review.pull-request` | Optional pull request identifier, propagated to the event |
 | `sift.review.auth-token` | Optional token injected into the clone URL (HTTPS only) |
+
+### `sift.review.tools.*` (optional)
+
+| Property | Default | Description |
+|---|---|---|
+| `sift.review.tools.allowed-shell-commands` | `[]` | Exact full commands permitted for `Bash`; empty blocks all shell commands |
+
+For example, this allows the exact shell command `pwd` without restricting non-shell tools:
+
+```yaml
+sift:
+  review:
+    tools:
+      allowed-shell-commands:
+        - pwd
+```
+
+Commands are matched case-sensitively without trimming, patterns, or prefix matching. Shell
+operators, quoting, substitutions, escapes, and control characters are rejected in configuration;
+background execution and malformed/ambiguous shell arguments are denied. Non-shell callbacks,
+including `Write`, `Edit`, `BashOutput`, and `KillShell`, are not restricted by the advisor.
+Denials become tool feedback so the model can continue instead of restarting the review.
+
+The shell tool inherits the process working directory, not the checkout directory. Do not
+configure `cd ... && ...`; use explicitly approved full commands with absolute paths where
+needed. `Read` enforces its allowed directory. `Grep` and `Glob` use the checkout as their
+default search location, but their working-directory setting is not a filesystem sandbox.
+
+Permissions are trusted deployment configuration. Approving a script or interpreter can grant
+arbitrary code execution, and command behavior can depend on environment and repository
+configuration. The advisor does not enforce filesystem or network isolation. See the
+[shared advisor component](tool-allowlist-advisor.md) and
+[ADR 0005](../adrs/0005-enforce-agent-tool-allowlists.md) for semantics and limitations.
 
 ### `sift.tools.web-search.*` (optional, defaults shown)
 
@@ -80,9 +114,8 @@ the configured endpoint rejects reasoning with function tools over Chat Completi
 
 The runner logs checkout, AI review, the summary and finding count, publication, and cleanup
 at INFO level. `org.springframework.ai` is configured at DEBUG, and the review client includes
-`SimpleLoggerAdvisor` to log its request and response. The advisor logs the outer client call;
-it does not provide a heartbeat while waiting for a model response or guarantee a log for every
-internal tool-call round.
+`SimpleLoggerAdvisor` to log requests and responses inside the guarded tool loop. It does not
+provide a heartbeat while waiting for a model response.
 
 DEBUG logs can contain prompts, repository diffs, tool context, and model output, including
 sensitive source content. Restrict access and retention. Set

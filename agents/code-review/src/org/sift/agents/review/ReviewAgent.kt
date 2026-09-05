@@ -1,5 +1,7 @@
 package org.sift.agents.review
 
+import org.sift.agents.shared.advisors.ToolAllowlistAdvisor
+import org.sift.agents.shared.advisors.ToolCallAllowlist
 import org.sift.agents.shared.tools.SearxngSearchTool
 import org.sift.events.CodeReviewCompletedEvent
 import org.sift.events.Finding
@@ -21,9 +23,17 @@ class ReviewAgent(
     chatClientBuilder: ChatClient.Builder,
     private val webSearchTool: ObjectProvider<SearxngSearchTool>,
     private val clock: Clock = Clock.systemUTC(),
+    private val toolProperties: ReviewToolProperties = ReviewToolProperties(),
 ) {
     private val chatClient = chatClientBuilder
-        .defaultAdvisors(SimpleLoggerAdvisor())
+        .defaultAdvisors(
+            SimpleLoggerAdvisor(),
+            ToolAllowlistAdvisor(
+                ToolCallAllowlist(
+                    allowedShellCommands = toolProperties.allowedShellCommands,
+                ),
+            ),
+        )
         .build()
 
     fun review(checkout: Checkout): ReviewResult {
@@ -79,6 +89,8 @@ class ReviewAgent(
         return """
             |The repository under review is checked out at: ${checkout.dir}
             |
+            |Exact allowed shell commands: ${toolProperties.allowedShellCommands.sorted().joinToString().ifEmpty { "none" }}
+            |
             |Review the following diff between the base branch and the branch under review:
             |
             |$cappedDiff
@@ -109,8 +121,11 @@ class ReviewAgent(
             You are given the diff of a change set. The repository containing the change set is
             checked out locally. Use the available tools (shell, grep, glob, file system, and web
             search if present) to explore the surrounding code and gather the context you need to
-            judge the change properly. When using the shell, change into the repository directory
-            given in the user message before running commands.
+            judge the change properly. Only shell commands are restricted by an allowlist. They
+            must exactly match a configured command; do not add cd, chaining, substitutions,
+            redirections, or background execution. The shell does not start in the checkout
+            directory. Prefer Read, Grep, and Glob for repository exploration. If a call is
+            denied, continue with non-shell tools. Do not attempt to modify the repository.
 
             Review the change for correctness, security issues, performance problems, error
             handling, readability, and maintainability. Only report findings that are noteworthy

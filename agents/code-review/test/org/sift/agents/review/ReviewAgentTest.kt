@@ -3,10 +3,12 @@ package org.sift.agents.review
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import org.sift.agents.shared.advisors.ToolAllowlistAdvisor
 import org.sift.agents.shared.tools.SearxngSearchTool
 import org.sift.events.Severity
 import org.springframework.ai.chat.client.ChatClient
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor
+import org.springframework.ai.chat.client.advisor.api.Advisor
 import org.springframework.beans.factory.ObjectProvider
 import java.nio.file.Files
 import java.nio.file.Path
@@ -38,7 +40,7 @@ class ReviewAgentTest {
     private val checkoutDir: Path = Files.createTempDirectory("sift-review-agent-test")
 
     private val agent by lazy {
-        every { chatClientBuilder.defaultAdvisors(*anyVararg<SimpleLoggerAdvisor>()) } returns chatClientBuilder
+        every { chatClientBuilder.defaultAdvisors(*anyVararg<Advisor>()) } returns chatClientBuilder
         every { chatClientBuilder.build() } returns chatClient
         every { chatClient.prompt() } returns requestSpec
         every { requestSpec.system(any<String>()) } returns requestSpec
@@ -74,7 +76,9 @@ class ReviewAgentTest {
 
         agent.review(Checkout(dir = checkoutDir, diff = "diff"))
 
-        verify(exactly = 1) { chatClientBuilder.defaultAdvisors(any<SimpleLoggerAdvisor>()) }
+        verify(exactly = 1) {
+            chatClientBuilder.defaultAdvisors(any<SimpleLoggerAdvisor>(), any<ToolAllowlistAdvisor>())
+        }
     }
 
     @Test
