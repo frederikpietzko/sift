@@ -9,7 +9,12 @@ import kotlin.io.path.deleteIfExists
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.readText
 
-data class Checkout(val dir: Path, val diff: String) {
+data class Checkout(
+    val dir: Path,
+    val diff: String,
+    val baseBranch: String? = null,
+    val branch: String? = null,
+) {
     fun cleanup() {
         dir.deleteRecursively()
     }
@@ -40,7 +45,12 @@ class GitCheckoutService {
             runGit(dir, "branch", "--force", properties.baseBranch, "origin/${properties.baseBranch}")
             val diff = runGit(dir, "diff", "${properties.baseBranch}...${properties.branch}")
             success = true
-            return Checkout(dir = dir, diff = diff)
+            return Checkout(
+                dir = dir,
+                diff = diff,
+                baseBranch = properties.baseBranch,
+                branch = properties.branch,
+            )
         } finally {
             if (!success) {
                 dir.deleteRecursively()

@@ -17,6 +17,42 @@ spring:
         model: gpt-5.6-luna
         reasoning-effort: none
 
+sift:
+  review:
+    tools:
+      # Exact, read-only, offline commands. The shell runs in the checkout directory.
+      # {base} and {branch} are replaced with the base branch and the branch under review.
+      allowed-shell-commands:
+        # Repository inspection
+        - git --no-pager status --short
+        - git --no-pager rev-parse HEAD
+        - git --no-pager log --oneline --no-decorate -n 30
+        - git --no-pager log --oneline --no-decorate {base}..{branch}
+        - git --no-pager log --stat --no-decorate {base}..{branch}
+        - git --no-pager shortlog -sn {base}..{branch}
+        - git --no-pager diff --stat {base}...{branch}
+        - git --no-pager diff --name-status {base}...{branch}
+        - git --no-pager show --stat --no-decorate HEAD
+        - git --no-pager ls-files
+        - git --no-pager branch --list
+        - git --no-pager tag --list
+        - git --no-pager submodule status
+        # Layout overview
+        - ls -la
+        - find . -maxdepth 2 -type d -not -path ./.git
+        - du -sh .
+        # Environment
+        - pwd
+        - id
+        - uname -a
+        - date -u
+        - nproc
+        - df -h .
+        - git --version
+        - java -version
+        - rg --version
+        - python3 --version
+
 logging:
   level:
     org.springframework.ai: DEBUG

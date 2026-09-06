@@ -3,13 +3,13 @@ package org.sift.agents.review
 import org.sift.agents.shared.advisors.ToolAllowlistAdvisor
 import org.sift.agents.shared.advisors.ToolCallAllowlist
 import org.sift.agents.shared.tools.SearxngSearchTool
+import org.sift.agents.shared.tools.WorkingDirectoryShellTool
 import org.sift.events.CodeReviewCompletedEvent
 import org.sift.events.Finding
 import org.slf4j.LoggerFactory
 import org.springaicommunity.agent.tools.FileSystemTools
 import org.springaicommunity.agent.tools.GlobTool
 import org.springaicommunity.agent.tools.GrepTool
-import org.springaicommunity.agent.tools.ShellTools
 import org.springframework.ai.chat.client.ChatClient
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor
 import org.springframework.beans.factory.ObjectProvider
@@ -26,24 +26,52 @@ class ReviewAgent(
     private val toolProperties: ReviewToolProperties = ReviewToolProperties(),
 ) {
     private val chatClient = chatClientBuilder
-        .defaultAdvisors(
-            SimpleLoggerAdvisor(),
-            ToolAllowlistAdvisor(
-                ToolCallAllowlist(
-                    allowedShellCommands = toolProperties.allowedShellCommands,
-                ),
-            ),
-        )
+        .defaultAdvisors(SimpleLoggerAdvisor())
         .build()
 
     fun review(checkout: Checkout): ReviewResult {
-        val userMessage = buildUserMessage(checkout)
+        val allowedShellCommands = resolveAllowedShellCommands(checkout)
+        val advisor = ToolAllowlistAdvisor(ToolCallAllowlist(allowedShellCommands = allowedShellCommands))
+        val userMessage = buildUserMessage(checkout, allowedShellCommands)
         val tools = buildTools(checkout.dir)
         return try {
-            callModel(userMessage, tools)
+            callModel(advisor, userMessage, tools)
         } catch (@Suppress("TooGenericExceptionCaught") exception: RuntimeException) {
             logger.warn("Review call failed, retrying once", exception)
-            callModel(userMessage, tools)
+            callModel(advisor, userMessage, tools)
+        }
+    }
+
+    /**
+     * Expands the `{base}` and `{branch}` placeholders of the configured shell command templates
+     * with the checkout's branch names. Templates whose placeholders cannot be resolved, or whose
+     * expansion is not a plain command accepted by [ToolCallAllowlist], are dropped with a warning
+     * instead of failing the review.
+     */
+    private fun resolveAllowedShellCommands(checkout: Checkout): Set<String> {
+        val values = mapOf(
+            BASE_PLACEHOLDER to checkout.baseBranch,
+            BRANCH_PLACEHOLDER to checkout.branch,
+        )
+        return toolProperties.allowedShellCommands.mapNotNullTo(linkedSetOf()) { template ->
+            val resolved = values.entries.fold<Map.Entry<String, String?>, String?>(template) { command, entry ->
+                if (command == null || !command.contains(entry.key)) {
+                    command
+                } else {
+                    entry.value?.let { value -> command.replace(entry.key, value) }
+                }
+            }
+            when {
+                resolved == null -> {
+                    logger.warn("Dropping shell command template '{}': branch names are not available", template)
+                    null
+                }
+                !ToolCallAllowlist.isSimpleCommand(resolved) -> {
+                    logger.warn("Dropping shell command template '{}': expansion is not a plain command", template)
+                    null
+                }
+                else -> resolved
+            }
         }
     }
 
@@ -71,9 +99,10 @@ class ReviewAgent(
         )
 
     @Suppress("SpreadOperator")
-    private fun callModel(userMessage: String, tools: List<Any>): ReviewResult =
+    private fun callModel(advisor: ToolAllowlistAdvisor, userMessage: String, tools: List<Any>): ReviewResult =
         requireNotNull(
             chatClient.prompt()
+                .advisors(advisor)
                 .system(SYSTEM_PROMPT)
                 .user(userMessage)
                 .tools(*tools.toTypedArray())
@@ -81,7 +110,7 @@ class ReviewAgent(
                 .entity(ReviewResult::class.java),
         ) { "The model did not return a structured review result" }
 
-    private fun buildUserMessage(checkout: Checkout): String {
+    private fun buildUserMessage(checkout: Checkout, allowedShellCommands: Set<String>): String {
         val diff = checkout.diff
         val cappedDiff = if (diff.length > MAX_DIFF_CHARS) {
             diff.take(MAX_DIFF_CHARS) + TRUNCATION_NOTE
@@ -91,7 +120,7 @@ class ReviewAgent(
         return """
             |The repository under review is checked out at: ${checkout.dir}
             |
-            |Exact allowed shell commands: ${toolProperties.allowedShellCommands.sorted().joinToString().ifEmpty { "none" }}
+            |Exact allowed shell commands: ${allowedShellCommands.sorted().joinToString().ifEmpty { "none" }}
             |
             |Review the following diff between the base branch and the branch under review:
             |
@@ -101,7 +130,7 @@ class ReviewAgent(
 
     private fun buildTools(dir: Path): List<Any> {
         val tools = mutableListOf<Any>(
-            ShellTools.builder().build(),
+            WorkingDirectoryShellTool(dir.toAbsolutePath()),
             GrepTool.builder().workingDirectory(dir).build(),
             GlobTool.builder().workingDirectory(dir).build(),
             FileSystemTools.builder().allowedDirectory(dir).build(),
@@ -112,6 +141,8 @@ class ReviewAgent(
 
     companion object {
         const val MAX_DIFF_CHARS: Int = 100_000
+        const val BASE_PLACEHOLDER: String = "{base}"
+        const val BRANCH_PLACEHOLDER: String = "{branch}"
         const val TRUNCATION_NOTE: String =
             "\n\n[Note: the diff was truncated because it exceeded $MAX_DIFF_CHARS characters.]"
 
@@ -125,9 +156,9 @@ class ReviewAgent(
             search if present) to explore the surrounding code and gather the context you need to
             judge the change properly. Only shell commands are restricted by an allowlist. They
             must exactly match a configured command; do not add cd, chaining, substitutions,
-            redirections, or background execution. The shell does not start in the checkout
-            directory. Prefer Read, Grep, and Glob for repository exploration. If a call is
-            denied, continue with non-shell tools. Do not attempt to modify the repository.
+            redirections, or background execution. The shell runs in the checkout directory.
+            Prefer Read, Grep, and Glob for repository exploration. If a call is denied,
+            continue with non-shell tools. Do not attempt to modify the repository.
 
             Review the change for correctness, security issues, performance problems, error
             handling, readability, and maintainability. Only report findings that are noteworthy

@@ -13,7 +13,7 @@ class ToolCallAllowlist(
     private val shellTools = shellTools.toSet()
 
     init {
-        require(this.allowedShellCommands.all { SIMPLE_COMMAND.matches(it) && it.isNotBlank() }) {
+        require(this.allowedShellCommands.all(::isSimpleCommand)) {
             "Shell allowlist entries must be non-blank commands without shell metacharacters or quoting"
         }
     }
@@ -42,13 +42,16 @@ class ToolCallAllowlist(
             (input["description"] == null || input["description"] is String) && validTimeout
     }
 
-    private companion object {
-        const val MAX_TIMEOUT_MS = 600_000L
-        val SIMPLE_COMMAND = Regex("[a-zA-Z0-9_./:=,@%+ -]+")
-        val SHELL_FIELDS = setOf("command", "timeout", "description", "runInBackground")
-        val jsonMapper: JsonMapper = JsonMapper.builder()
+    companion object {
+        private const val MAX_TIMEOUT_MS = 600_000L
+        private val SIMPLE_COMMAND = Regex("[a-zA-Z0-9_./:=,@%+ -]+")
+        private val SHELL_FIELDS = setOf("command", "timeout", "description", "runInBackground")
+        private val jsonMapper: JsonMapper = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .build()
+
+        /** True when [command] is a non-blank command without shell metacharacters or quoting. */
+        fun isSimpleCommand(command: String): Boolean = command.isNotBlank() && SIMPLE_COMMAND.matches(command)
     }
 }

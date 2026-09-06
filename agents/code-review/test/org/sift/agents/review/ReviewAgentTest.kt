@@ -39,15 +39,23 @@ class ReviewAgentTest {
 
     private val checkoutDir: Path = Files.createTempDirectory("sift-review-agent-test")
 
-    private val agent by lazy {
+    private val agent by lazy { agentWithCommands() }
+
+    private fun agentWithCommands(vararg commands: String): ReviewAgent {
         every { chatClientBuilder.defaultAdvisors(*anyVararg<Advisor>()) } returns chatClientBuilder
         every { chatClientBuilder.build() } returns chatClient
         every { chatClient.prompt() } returns requestSpec
+        every { requestSpec.advisors(*anyVararg<Advisor>()) } returns requestSpec
         every { requestSpec.system(any<String>()) } returns requestSpec
         every { requestSpec.user(capture(userMessages)) } returns requestSpec
         every { requestSpec.tools(*anyVararg<Any>()) } returns requestSpec
         every { requestSpec.call() } returns callSpec
-        ReviewAgent(chatClientBuilder, webSearchTool, clock)
+        return ReviewAgent(
+            chatClientBuilder,
+            webSearchTool,
+            clock,
+            ReviewToolProperties(allowedShellCommands = commands.toSet()),
+        )
     }
 
     @AfterTest
@@ -71,14 +79,50 @@ class ReviewAgentTest {
     }
 
     @Test
-    fun `review client includes a logging advisor`() {
+    fun `review client includes a logging advisor and a per-review allowlist advisor`() {
         every { callSpec.entity(ReviewResult::class.java) } returns reviewResult()
 
         agent.review(Checkout(dir = checkoutDir, diff = "diff"))
 
-        verify(exactly = 1) {
-            chatClientBuilder.defaultAdvisors(any<SimpleLoggerAdvisor>(), any<ToolAllowlistAdvisor>())
-        }
+        verify(exactly = 1) { chatClientBuilder.defaultAdvisors(any<SimpleLoggerAdvisor>()) }
+        verify(exactly = 1) { requestSpec.advisors(any<ToolAllowlistAdvisor>()) }
+    }
+
+    @Test
+    fun `review expands branch placeholders in allowed shell commands`() {
+        every { callSpec.entity(ReviewResult::class.java) } returns reviewResult()
+        val agent = agentWithCommands(
+            "pwd",
+            "git --no-pager diff --stat {base}...{branch}",
+            "git --no-pager log --oneline {base}..{branch}",
+        )
+
+        agent.review(Checkout(dir = checkoutDir, diff = "diff", baseBranch = "main", branch = "feature/x"))
+
+        assertTrue(
+            "Exact allowed shell commands: git --no-pager diff --stat main...feature/x, " +
+                "git --no-pager log --oneline main..feature/x, pwd" in capturedUserMessage(),
+        )
+    }
+
+    @Test
+    fun `review drops templates when branch names are not available`() {
+        every { callSpec.entity(ReviewResult::class.java) } returns reviewResult()
+        val agent = agentWithCommands("pwd", "git --no-pager diff --stat {base}...{branch}")
+
+        agent.review(Checkout(dir = checkoutDir, diff = "diff"))
+
+        assertTrue("Exact allowed shell commands: pwd\n" in capturedUserMessage())
+    }
+
+    @Test
+    fun `review drops templates whose expansion is not a plain command`() {
+        every { callSpec.entity(ReviewResult::class.java) } returns reviewResult()
+        val agent = agentWithCommands("pwd", "git --no-pager diff --stat {base}...{branch}")
+
+        agent.review(Checkout(dir = checkoutDir, diff = "diff", baseBranch = "main", branch = "x;id"))
+
+        assertTrue("Exact allowed shell commands: pwd\n" in capturedUserMessage())
     }
 
     @Test

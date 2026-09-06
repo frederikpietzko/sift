@@ -22,10 +22,11 @@ The `ReviewRunner` (`ApplicationRunner`) orchestrates a single run:
    `CommitShaMismatchException` when the branch tip has moved away from the requested SHA, and
    with `GitCommandException` on any git error or timeout. A different tip is never reviewed silently.
 2. **Review** — `ReviewAgent.review(checkout)` sends the (capped) diff to the LLM together with
-   shell, grep, glob, and file-system tools, plus the optional SearXNG web-search tool (enabled
-   by default). A shared advisor checks only shell commands before execution; shell commands
-   are denied by default, while non-shell tools pass through. The call is retried once on failure and returns a
-   structured `ReviewResult` (summary + findings).
+   a checkout-scoped shell tool (`WorkingDirectoryShellTool` from `agents/shared`), grep, glob,
+   and file-system tools, plus the optional SearXNG web-search tool (enabled by default). A
+   shared advisor, built per review from the resolved command allowlist, checks only shell
+   commands before execution; non-shell tools pass through. The call is retried once on failure
+   and returns a structured `ReviewResult` (summary + findings).
 3. **Publish** — the result is mapped to a `CodeReviewCompletedEvent` and published via the
    shared `EventPublisher` under the routing key `code-review.completed` to the `sift.events`
    exchange.
@@ -59,9 +60,21 @@ exchange. Connection settings still come from application configuration and prof
 
 | Property | Default | Description |
 |---|---|---|
-| `sift.review.tools.allowed-shell-commands` | `[]` | Exact full commands permitted for `Bash`; empty blocks all shell commands |
+| `sift.review.tools.allowed-shell-commands` | see below | Exact full command templates permitted for `Bash`; an empty list blocks all shell commands |
 
-For example, this allows the exact shell command `pwd` without restricting non-shell tools:
+Entries are templates: `{base}` and `{branch}` are replaced per review with the base branch
+and the branch under review (both exist as local branches in the checkout). Templates that
+cannot be resolved, or whose expansion contains characters the allowlist rejects (for example
+a branch name containing `;`), are dropped with a warning and never reach the model. The
+resolved commands are listed in the user prompt.
+
+The bundled `application.yaml` ships a read-only, offline default set: git inspection
+(`status`, `rev-parse`, `log`, `shortlog`, `diff --stat`/`--name-status` for
+`{base}...{branch}`, `show --stat`, `ls-files`, `branch --list`, `tag --list`,
+`submodule status`, all with `--no-pager`), repository layout (`ls -la`, `find` directories,
+`du -sh .`), and environment probes (`pwd`, `id`, `uname -a`, `date -u`, `nproc`, `df -h .`,
+and `--version` for git, java, rg, python3). No entry fetches, pushes, writes, or executes
+repository code. Override the whole list to change it, for example:
 
 ```yaml
 sift:
@@ -69,18 +82,20 @@ sift:
     tools:
       allowed-shell-commands:
         - pwd
+        - git --no-pager diff --stat {base}...{branch}
 ```
 
 Commands are matched case-sensitively without trimming, patterns, or prefix matching. Shell
 operators, quoting, substitutions, escapes, and control characters are rejected in configuration;
 background execution and malformed/ambiguous shell arguments are denied. Non-shell callbacks,
-including `Write`, `Edit`, `BashOutput`, and `KillShell`, are not restricted by the advisor.
-Denials become tool feedback so the model can continue instead of restarting the review.
+including `Write` and `Edit`, are not restricted by the advisor. Denials become tool feedback so
+the model can continue instead of restarting the review.
 
-The shell tool inherits the process working directory, not the checkout directory. Do not
-configure `cd ... && ...`; use explicitly approved full commands with absolute paths where
-needed. `Read` enforces its allowed directory. `Grep` and `Glob` use the checkout as their
-default search location, but their working-directory setting is not a filesystem sandbox.
+The shell tool runs every command in the checkout directory, so relative paths such as `.`
+refer to the repository root. There is no background execution, `BashOutput`, or `KillShell`.
+Do not configure `cd ... && ...`. `Read` enforces its allowed directory. `Grep` and `Glob` use
+the checkout as their default search location, but their working-directory setting is not a
+filesystem sandbox.
 
 Permissions are trusted deployment configuration. Approving a script or interpreter can grant
 arbitrary code execution, and command behavior can depend on environment and repository

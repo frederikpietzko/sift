@@ -48,6 +48,24 @@ are denied. Configuration entries allow only ASCII letters, digits, spaces, and
 wildcards, and escapes are rejected at policy construction. There is no prefix matching,
 trimming, path expansion, or shell parsing.
 
+## Working-Directory Shell Tool
+
+`org.sift.agents.shared.tools.WorkingDirectoryShellTool` is a Kotlin port of the
+spring-ai-agent-utils `ShellTools` for agents that must run shell commands inside a specific
+directory (for example a repository checkout) rather than the process working directory. It
+mirrors the upstream tools one to one — `Bash` (`command`, `timeout`, `description`,
+`runInBackground`), `BashOutput` (`bash_id`, `filter`) and `KillShell` (`bash_id`) — with the
+same output format (`bash_id:` header, separate `STDERR:` section, `Exit code:` only on
+non-zero exit, truncation at 30 000 characters, default timeout 120 s / max 600 s), so the
+shell policy above applies unchanged. The only behavioural differences are that every command
+starts in the configured absolute directory and background processes are tracked per tool
+instance instead of in a static registry. Because the policy denies `runInBackground=true`,
+`BashOutput`/`KillShell` have nothing to act on for review agents.
+
+`ToolCallAllowlist.isSimpleCommand(command)` exposes the configuration-entry validation so
+callers that derive commands at runtime (for example by expanding placeholders) can drop
+entries that would otherwise fail policy construction.
+
 ## Limits of Protection
 
 This is execution authorization, not a sandbox. An explicitly allowed command can still run

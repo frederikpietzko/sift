@@ -46,6 +46,10 @@ class ReviewToolPolicyTest {
                 "2", "function", "Bash",
                 jsonMapper.writeValueAsString(mapOf("command" to "touch $shellFile")),
             ),
+            AssistantMessage.ToolCall(
+                "3", "function", "Bash",
+                jsonMapper.writeValueAsString(mapOf("command" to "pwd", "description" to "print directory")),
+            ),
         )
         val rounds = listOf(
             ChatResponse(listOf(Generation(AssistantMessage.builder().toolCalls(calls).build()))),
@@ -59,6 +63,7 @@ class ReviewToolPolicyTest {
         val agent = ReviewAgent(
             chatClientBuilder = ChatClient.builder(model),
             webSearchTool = mockk<ObjectProvider<SearxngSearchTool>>(relaxed = true),
+            toolProperties = ReviewToolProperties(allowedShellCommands = setOf("pwd")),
         )
 
         assertEquals("Reviewed", agent.review(Checkout(dir = checkoutDir, diff = "diff")).summary)
@@ -66,9 +71,13 @@ class ReviewToolPolicyTest {
         assertFalse(Files.exists(shellFile))
         assertEquals(2, prompts.size)
         val responses = prompts.last().instructions.filterIsInstance<ToolResponseMessage>().single().responses
-        assertEquals(2, responses.size)
+        assertEquals(3, responses.size)
         assertFalse(responses[0].responseData().startsWith("Shell command denied by policy"))
         assertTrue(responses[1].responseData().startsWith("Shell command denied by policy"))
+        val shellResult = responses[2].responseData()
+        assertTrue("bash_id: shell_" in shellResult, shellResult)
+        assertTrue(checkoutDir.toRealPath().toString() in shellResult, shellResult)
+        assertFalse("Exit code" in shellResult, shellResult)
     }
 
     @Test

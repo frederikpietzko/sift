@@ -4,7 +4,7 @@ import java.util.concurrent.TimeUnit;
 import org.springaicommunity.agent.tools.FileSystemTools;
 import org.springaicommunity.agent.tools.GlobTool;
 import org.springaicommunity.agent.tools.GrepTool;
-import org.springaicommunity.agent.tools.ShellTools;
+import org.sift.agents.shared.tools.WorkingDirectoryShellTool;
 
 /** Image-only validation, never added to the published application. No model calls. */
 public final class ToolProbe {
@@ -32,8 +32,12 @@ public final class ToolProbe {
         contains(GrepTool.builder().workingDirectory(directory).build().grep(
                 "SIFT_TOOL_SENTINEL", directory.toString(), null, null, null, null, null,
                 null, null, null, null, null, null), "fixture.txt");
-        // The advisor may explicitly permit pwd; this tests the real shell callback's runtime needs.
-        contains(ShellTools.builder().build().bash("pwd", 10000L, "runtime probe", false), "/scratch");
+        // The advisor may explicitly permit pwd; this tests the shell tool the agent uses at runtime,
+        // which must run in the checkout directory rather than the process working directory.
+        String shellOutput = new WorkingDirectoryShellTool(directory.toAbsolutePath())
+                .bash("pwd", 10000L, "runtime probe", false);
+        contains(shellOutput, "bash_id: shell_");
+        contains(shellOutput, directory.toRealPath().toString());
         Path checkout = directory.resolve("checkout");
         git(directory, "clone", "--depth=1", "https://github.com/frederikpietzko/ebfs-jpa.git", checkout.toString());
         git(checkout, "fetch", "origin", "HEAD");
