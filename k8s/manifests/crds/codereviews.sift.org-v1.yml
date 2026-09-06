@@ -30,8 +30,19 @@ spec:
           spec:
             description: "CodeReviewSpec"
             properties:
+              baseBranch:
+                description: "The base branch against which the requested commit is\
+                  \ reviewed."
+                pattern: "^\\S+$"
+                type: "string"
               branch:
                 description: "The branch of the repository that needs to be reviewed."
+                pattern: "^\\S+$"
+                type: "string"
+              commitSha:
+                description: "The exact full 40-character hexadecimal Git commit SHA\
+                  \ to review."
+                pattern: "^[0-9a-fA-F]{40}$"
                 type: "string"
               pullRequest:
                 description: "The pull request number of the repository that needs\
@@ -40,17 +51,83 @@ spec:
               repositoryUrl:
                 description: "The repository URL of the repository that needs to be\
                   \ reviewed."
+                pattern: "^\\S+$"
                 type: "string"
             required:
+            - "baseBranch"
             - "branch"
+            - "commitSha"
             - "repositoryUrl"
             type: "object"
           status:
             description: "CodeReviewStatus"
             properties:
+              commitSha:
+                description: "The requested commit SHA for this execution."
+                type: "string"
+              completedAt:
+                description: "Execution completion time in RFC 3339 UTC format."
+                type: "string"
+              conditions:
+                description: "Generation-aware conditions with reason, message and\
+                  \ transition time."
+                items:
+                  properties:
+                    lastTransitionTime:
+                      type: "string"
+                    message:
+                      type: "string"
+                    observedGeneration:
+                      type: "integer"
+                    reason:
+                      type: "string"
+                    status:
+                      type: "string"
+                    type:
+                      type: "string"
+                  type: "object"
+                type: "array"
+              configMapRef:
+                description: "The owned immutable ConfigMap for this execution."
+                properties:
+                  name:
+                    description: "The name of the referenced resource in the CodeReview's\
+                      \ namespace."
+                    type: "string"
+                  uid:
+                    description: "The UID of the referenced resource, guarding against\
+                      \ name reuse."
+                    type: "string"
+                required:
+                - "name"
+                - "uid"
+                type: "object"
+              executionId:
+                description: "Execution identity: <CodeReview UID>:<generation>."
+                type: "string"
+              jobRef:
+                description: "The owned Job for this execution, including UID to prevent\
+                  \ name reuse."
+                properties:
+                  name:
+                    description: "The name of the referenced resource in the CodeReview's\
+                      \ namespace."
+                    type: "string"
+                  uid:
+                    description: "The UID of the referenced resource, guarding against\
+                      \ name reuse."
+                    type: "string"
+                required:
+                - "name"
+                - "uid"
+                type: "object"
               message:
                 description: "Error messages or other relevant information."
                 type: "string"
+              observedGeneration:
+                description: "The spec generation represented by this status, not\
+                  \ the latest event received."
+                type: "integer"
               phase:
                 description: "The phase of the code review."
                 enum:
@@ -59,6 +136,9 @@ spec:
                 - "PENDING"
                 - "RUNNING"
                 - "SUCCESS"
+                type: "string"
+              startedAt:
+                description: "Execution start time in RFC 3339 UTC format."
                 type: "string"
             type: "object"
         type: "object"

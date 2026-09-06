@@ -52,6 +52,8 @@ class ReviewAgent(
             repositoryUrl = properties.repositoryUrl,
             branch = properties.branch,
             baseBranch = properties.baseBranch,
+            commitSha = properties.commitSha,
+            executionId = properties.executionId,
             pullRequest = properties.pullRequest,
             summary = result.summary,
             findings = result.findings.map { finding ->

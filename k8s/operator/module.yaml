@@ -1,0 +1,21 @@
+product: jvm/app
+apply:
+  - //config/detekt.module-template.yaml
+  - //config/spring.module-template.yaml
+
+settings:
+  jvm:
+    mainClass: org.sift.operator.MainKt
+
+dependencies:
+  - $kotlin.reflect
+  - $spring.boot.starter
+  - $spring.boot.starter.validation
+  - $libs.spring.operator.framework
+  - //k8s/crds
+
+test-dependencies:
+  - $spring.boot.starter.test
+  - $libs.spring.operator.framework.test
+  - $libs.fabrics.crd.generator.api
+  - $libs.mockk

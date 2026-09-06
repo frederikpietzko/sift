@@ -1,0 +1,16 @@
+# Additional host-operator configuration, never the agent's local profile.
+sift:
+  operator:
+    namespace: sift-dev
+    services:
+      model-base-url: 'http://jb-central:19516/wire/{proxyToken}/codex/openai/v1'
+      model: gpt-5.6-luna
+      searxng-url: http://searxng:8888
+      rabbitmq-host: rabbitmq
+      rabbitmq-port: 5672
+      rabbitmq-username: sift
+      rabbitmq-virtual-host: /
+    secrets:
+      model-api-key: {name: sift-local-credentials, key: model-api-key}
+      proxy-token: {name: sift-local-credentials, key: proxy-token}
+      rabbitmq-password: {name: sift-local-credentials, key: rabbitmq-password}

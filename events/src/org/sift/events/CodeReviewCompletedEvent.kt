@@ -10,6 +10,8 @@ data class CodeReviewCompletedEvent(
     val repositoryUrl: String,
     val branch: String,
     val baseBranch: String,
+    val commitSha: String,
+    val executionId: String,
     val pullRequest: String?,
     val summary: String,
     val findings: List<Finding>,

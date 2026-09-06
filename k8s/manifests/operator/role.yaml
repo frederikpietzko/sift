@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sift-operator
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+rules:
+  - apiGroups: [sift.org]
+    resources: [codereviews]
+    verbs: [get, list, watch]
+  - apiGroups: [sift.org]
+    resources: [codereviews/status]
+    verbs: [update]
+  - apiGroups: ['']
+    resources: [configmaps]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list, watch]

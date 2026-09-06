@@ -24,6 +24,8 @@ class ReviewRunnerTest {
         repositoryUrl = "https://example.com/org/repo.git",
         branch = "feature",
         baseBranch = "main",
+        commitSha = "0123456789abcdef0123456789abcdef01234567",
+        executionId = "review-uid:1",
         pullRequest = "42",
         authToken = null,
     )
@@ -42,6 +44,8 @@ class ReviewRunnerTest {
         repositoryUrl = properties.repositoryUrl,
         branch = properties.branch,
         baseBranch = properties.baseBranch,
+        commitSha = properties.commitSha,
+        executionId = properties.executionId,
         pullRequest = properties.pullRequest,
         summary = result.summary,
         findings = emptyList(),

@@ -47,6 +47,8 @@ class RabbitEventPublisherTest {
             repositoryUrl = "https://example.com/org/repo.git",
             branch = "feature/messaging",
             baseBranch = "main",
+            commitSha = "0123456789abcdef0123456789abcdef01234567",
+            executionId = "review-uid:1",
             pullRequest = "42",
             summary = "Looks good overall.",
             findings = emptyList(),

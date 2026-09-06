@@ -16,6 +16,7 @@ Kotlin Toolchain multi-module build.
 - k8s/crds: Kotlin, Definition of CRDs as Kotlin classes with fabric8 apt
 - k8s/manifests: YAML, Kubernetes manifests generated from CRDs, future home for k8s manifests for deployments, roles,
   service account, helm charts, etc.
+- k8s/local: potentially helpful tools for testing operator in k8s locally
 - k8s/operator: Future -> Kotlin, Spring Boot 4, java-operator-sdk, k8s-operator to manage agent jobs
 - agents: Kotlin, Spring Boot 4, Spring AI; different agents to perform actions to be run as k8s jobs
     - shared: Kotlin, Spring AI; Shared code for agents, eg common advisors
@@ -30,6 +31,7 @@ Kotlin Toolchain multi-module build.
 - **Linting**: Use `./kotlin check detekt`
 - **Tests**: Use `./kotlin test` or `./kotlin check test`
 - **Checks**: Use `./kotlin check` to run all checks
+- **k8s**: k8s kind cluster running, kubeconfig at `./.kubeconfig`
 
 # Context Pointers
 

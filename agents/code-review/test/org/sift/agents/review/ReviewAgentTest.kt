@@ -145,6 +145,8 @@ class ReviewAgentTest {
         assertEquals(properties.repositoryUrl, event.repositoryUrl)
         assertEquals(properties.branch, event.branch)
         assertEquals(properties.baseBranch, event.baseBranch)
+        assertEquals(properties.commitSha, event.commitSha)
+        assertEquals(properties.executionId, event.executionId)
         assertEquals(properties.pullRequest, event.pullRequest)
         assertEquals(result.summary, event.summary)
         assertEquals(fixedInstant, event.completedAt)
@@ -184,6 +186,8 @@ class ReviewAgentTest {
         repositoryUrl = "https://example.com/org/repo.git",
         branch = "feature",
         baseBranch = "main",
+        commitSha = "0123456789abcdef0123456789abcdef01234567",
+        executionId = "review-uid:1",
         pullRequest = "42",
         authToken = null,
     )

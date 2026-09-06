@@ -19,6 +19,8 @@ class CodeReviewCompletedEventTest {
         repositoryUrl = "https://github.com/example/sift.git",
         branch = "feature/events-module",
         baseBranch = "main",
+        commitSha = "0123456789abcdef0123456789abcdef01234567",
+        executionId = "review-uid:1",
         pullRequest = null,
         summary = "Looks good overall, one blocker found.",
         findings = [
@@ -53,6 +55,8 @@ class CodeReviewCompletedEventTest {
             "repositoryUrl",
             "branch",
             "baseBranch",
+            "commitSha",
+            "executionId",
             "pullRequest",
             "summary",
             "findings",

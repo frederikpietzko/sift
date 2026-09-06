@@ -5,6 +5,7 @@ modules:
   - build-config/detekt
   - events
   - k8s/crds
+  - k8s/operator
   - server
 
 plugins:

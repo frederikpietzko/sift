@@ -29,6 +29,8 @@ class MessagingConfigurationTest {
             repositoryUrl = "https://example.com/org/repo.git",
             branch = "feature/messaging",
             baseBranch = "main",
+            commitSha = "0123456789abcdef0123456789abcdef01234567",
+            executionId = "review-uid:1",
             pullRequest = "42",
             summary = "Looks good overall.",
             findings = listOf(
@@ -52,6 +54,8 @@ class MessagingConfigurationTest {
         assertTrue(body.contains(""""repositoryUrl":"https://example.com/org/repo.git""""))
         assertTrue(body.contains(""""branch":"feature/messaging""""))
         assertTrue(body.contains(""""baseBranch":"main""""))
+        assertTrue(body.contains(""""commitSha":"0123456789abcdef0123456789abcdef01234567""""))
+        assertTrue(body.contains(""""executionId":"review-uid:1""""))
         assertTrue(body.contains(""""pullRequest":"42""""))
         assertTrue(body.contains(""""summary":"Looks good overall.""""))
         assertTrue(body.contains(""""severity":"MAJOR""""))

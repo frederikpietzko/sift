@@ -18,6 +18,9 @@ data class Checkout(val dir: Path, val diff: String) {
 class GitCommandException(command: List<String>, detail: String) :
     RuntimeException("git command '${redactCredentials(command.joinToString(" "))}' $detail")
 
+class CommitShaMismatchException(branch: String, expected: String, actual: String) :
+    RuntimeException("branch '$branch' resolved to commit $actual but commit $expected was requested")
+
 @Service
 class GitCheckoutService {
 
@@ -27,7 +30,13 @@ class GitCheckoutService {
         try {
             runGit(dir, "clone", cloneUrl(properties), ".")
             runGit(dir, "fetch", "origin", properties.baseBranch, properties.branch)
-            runGit(dir, "checkout", properties.branch)
+            val expected = properties.commitSha.lowercase()
+            val actual = runGit(dir, "rev-parse", "--verify", "origin/${properties.branch}^{commit}").trim()
+            if (actual != expected) {
+                throw CommitShaMismatchException(properties.branch, expected, actual)
+            }
+            runGit(dir, "checkout", "--detach", expected)
+            runGit(dir, "branch", "--force", properties.branch, expected)
             runGit(dir, "branch", "--force", properties.baseBranch, "origin/${properties.baseBranch}")
             val diff = runGit(dir, "diff", "${properties.baseBranch}...${properties.branch}")
             success = true

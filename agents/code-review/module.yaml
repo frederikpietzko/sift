@@ -6,7 +6,10 @@ apply:
 settings:
   jvm:
     mainClass: org.sift.agents.review.MainKt
-
+    # Spring Boot defaults to classes mode for DevTools restarts, but that packages
+    # local module outputs as BOOT-INF/lib directories the Boot loader cannot load
+    # (KTC-5686). Jars mode is required for a startable executable-jar.
+    runtimeClasspathMode: jars
 
 dependencies:
   - $spring.boot.starter

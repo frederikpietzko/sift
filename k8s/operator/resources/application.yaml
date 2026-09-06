@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: sift-operator
+  main:
+    web-application-type: none
+
+javaoperatorsdk:
+  crd:
+    apply-on-startup: false
+  reconcilers:
+    codereview:
+      namespaces:
+        - ${sift.operator.namespace}
+
+sift:
+  operator:
+    namespace: ${SIFT_OPERATOR_NAMESPACE:sift-dev}
+    review:
+      # Published arm64 image with SHA-pinned checkout and identity events; passed the sample-PR E2E gate
+      # on 2026-09-06 (see docs/validation/code-review-e2e-2026-09-06.md).
+      image: ${SIFT_REVIEW_IMAGE:jbfpietzko/shift-code-review-agent@sha256:3a1b0931077c0bb2d0462c4d8ba065c1e57c8892b76169d1d80dbf6af4dd29e4}

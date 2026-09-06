@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sift-local-bridges
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+data:
+  haproxy.cfg: |
+    global
+      maxconn 128
+    defaults
+      mode tcp
+      retries 0
+      timeout connect 5s
+      timeout client 25h
+      timeout server 25h
+    resolvers cluster
+      parse-resolv-conf
+      resolve_retries 3
+      timeout resolve 1s
+      timeout retry 1s
+      hold valid 10s
+    listen model
+      bind :19516
+      server host host.docker.internal:19516 resolvers cluster resolve-prefer ipv4 init-addr libc,none
+    listen search
+      bind :8888
+      server host host.docker.internal:8888 resolvers cluster resolve-prefer ipv4 init-addr libc,none
+    listen messaging
+      bind :5672
+      server host host.docker.internal:5672 resolvers cluster resolve-prefer ipv4 init-addr libc,none
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sift-local-bridges
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sift-local-bridges
+  template:
+    metadata:
+      labels:
+        app: sift-local-bridges
+    spec:
+      serviceAccountName: sift-review
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridges
+          image: haproxy:3.2-alpine@sha256:6343ce34a132a5dceaa24767d739df2bd519f8f7c1079ae39e4821334e8eb42e
+          command: [haproxy, -W, -db, -f, /etc/haproxy/haproxy.cfg]
+          ports:
+            - {name: model, containerPort: 19516}
+            - {name: search, containerPort: 8888}
+            - {name: messaging, containerPort: 5672}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          readinessProbe:
+            tcpSocket: {port: model}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/haproxy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: sift-local-bridges
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jb-central
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  selector: {app: sift-local-bridges}
+  ports:
+    - {name: model, port: 19516, targetPort: model}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  selector: {app: sift-local-bridges}
+  ports:
+    - {name: search, port: 8888, targetPort: search}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  selector: {app: sift-local-bridges}
+  ports:
+    - {name: messaging, port: 5672, targetPort: messaging}

@@ -16,8 +16,11 @@ result as a `code-review.completed` event to the `sift.events` topic exchange on
 The `ReviewRunner` (`ApplicationRunner`) orchestrates a single run:
 
 1. **Checkout** — `GitCheckoutService.checkout(properties)` clones the repository into a
-   temporary directory, fetches the base branch and the branch under review, and computes the
-   diff (`baseBranch...branch`). Fails with `GitCommandException` on any git error or timeout.
+   temporary directory, fetches the base branch and the branch under review, verifies that
+   `origin/<branch>` resolves to exactly `sift.review.commit-sha`, checks out that commit
+   (detached), and computes the diff (`baseBranch...branch`). Fails with
+   `CommitShaMismatchException` when the branch tip has moved away from the requested SHA, and
+   with `GitCommandException` on any git error or timeout. A different tip is never reviewed silently.
 2. **Review** — `ReviewAgent.review(checkout)` sends the (capped) diff to the LLM together with
    shell, grep, glob, and file-system tools, plus the optional SearXNG web-search tool (enabled
    by default). A shared advisor checks only shell commands before execution; shell commands
@@ -47,6 +50,8 @@ exchange. Connection settings still come from application configuration and prof
 | `sift.review.repository-url` | URL of the repository to review |
 | `sift.review.branch` | Branch under review |
 | `sift.review.base-branch` | Base branch to diff against |
+| `sift.review.commit-sha` | Full 40-hex head SHA that `branch` must resolve to; reviewed and propagated to the event |
+| `sift.review.execution-id` | Opaque execution identity (`<CR UID>:<generation>` from the operator), propagated to the event |
 | `sift.review.pull-request` | Optional pull request identifier, propagated to the event |
 | `sift.review.auth-token` | Optional token injected into the clone URL (HTTPS only) |
 
@@ -121,6 +126,38 @@ DEBUG logs can contain prompts, repository diffs, tool context, and model output
 sensitive source content. Restrict access and retention. Set
 `logging.level.org.springframework.ai=INFO` to disable these diagnostic logs while retaining
 runner progress messages. HTTP wire logging is not enabled.
+
+## Packaging
+
+`agents/code-review/module.yaml` sets `settings.jvm.runtimeClasspathMode: jars`. Spring Boot
+defaults to `classes` for DevTools restarts, but that mode packages local module outputs as
+`BOOT-INF/lib` directories the Boot loader cannot load (KTC-5686). Jars mode nests
+`events-jvm.jar` and `shared-jvm.jar` so `java -jar` works for Kubernetes Jobs.
+
+For local artifact development only, package with:
+
+```shell
+./kotlin package --module code-review --format executable-jar
+```
+
+This unstaged command can include ignored local resources; **do not publish its output**.
+Use `agents/code-review/Dockerfile` and the [image workflow](code-review-image.md) for publication.
+The Docker build context excludes local configuration before compilation, including resources
+that would otherwise enter dependency JARs. The runtime is nonroot, uses a JRE 25 with native
+HTTPS Git, Bash and required search/tool utilities, and contains no package manager, build
+toolchain, curl, wget, or network-debugging CLI. It is hardened, not air-gapped.
+
+The [published candidate evidence](../validation/code-review-image-2026-09-06.md) records image
+and artifact digests, runtime checks and vulnerability findings for the pre-identity candidate.
+The [sample-PR E2E evidence](../validation/code-review-e2e-2026-09-06.md) records the passing
+operator-scheduled gate against the published image that packages SHA-pinned checkout and
+`commitSha`/`executionId` event correlation.
+
+Do not publish artifacts that contain `application-local.yaml`. Operator Jobs mount review
+configuration and set only
+`SPRING_CONFIG_ADDITIONAL_LOCATION=file:/etc/sift/review/application.yaml` (see the
+[operator component](code-review-operator.md)). Never activate the `local` profile in cluster
+Jobs.
 
 ## Local Development
 

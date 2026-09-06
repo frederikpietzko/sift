@@ -30,19 +30,35 @@ class GitCheckoutServiceTest {
     fun `checkout clones the repository and computes the merge base diff`() {
         val origin = createOriginRepository()
 
-        val checkout = service.checkout(reviewProperties(repositoryUrl = "file://$origin"))
+        val checkout = service.checkout(reviewProperties(repositoryUrl = "file://$origin", commitSha = featureSha(origin)))
         cleanupPaths.add(checkout.dir)
 
         assertTrue(checkout.dir.exists())
         assertTrue("+feature change" in checkout.diff)
         assertFalse("main only change" in checkout.diff)
+        assertEquals(featureSha(origin), git(checkout.dir, "rev-parse", "HEAD").trim())
+    }
+
+    @Test
+    fun `checkout fails when the branch tip does not match the requested commit sha`() {
+        val origin = createOriginRepository()
+        val mainSha = git(origin, "rev-parse", "main").trim()
+        val before = tempCheckoutDirectories()
+
+        val exception = assertFailsWith<CommitShaMismatchException> {
+            service.checkout(reviewProperties(repositoryUrl = "file://$origin", commitSha = mainSha))
+        }
+
+        assertTrue(mainSha in exception.message.orEmpty())
+        assertTrue(featureSha(origin) in exception.message.orEmpty())
+        assertEquals(before, tempCheckoutDirectories())
     }
 
     @Test
     fun `cleanup deletes the checkout directory`() {
         val origin = createOriginRepository()
 
-        val checkout = service.checkout(reviewProperties(repositoryUrl = "file://$origin"))
+        val checkout = service.checkout(reviewProperties(repositoryUrl = "file://$origin", commitSha = featureSha(origin)))
         cleanupPaths.add(checkout.dir)
         assertTrue(checkout.dir.exists())
 
@@ -84,15 +100,22 @@ class GitCheckoutServiceTest {
         return origin
     }
 
-    private fun reviewProperties(repositoryUrl: String) = ReviewProperties(
+    private fun featureSha(origin: Path): String = git(origin, "rev-parse", "feature").trim()
+
+    private fun reviewProperties(
+        repositoryUrl: String,
+        commitSha: String = "0123456789abcdef0123456789abcdef01234567",
+    ) = ReviewProperties(
         repositoryUrl = repositoryUrl,
         branch = "feature",
         baseBranch = "main",
+        commitSha = commitSha,
+        executionId = "review-uid:1",
         pullRequest = null,
         authToken = null,
     )
 
-    private fun git(dir: Path, vararg args: String) {
+    private fun git(dir: Path, vararg args: String): String {
         val command = listOf("git", "-c", "user.name=Sift Test", "-c", "user.email=sift@test.local") + args
         val process = ProcessBuilder(command)
             .directory(dir.toFile())
@@ -103,6 +126,7 @@ class GitCheckoutServiceTest {
         check(finished && process.exitValue() == 0) {
             "git ${args.joinToString(" ")} failed: $output"
         }
+        return output
     }
 
     private fun tempCheckoutDirectories(): Set<String> =
