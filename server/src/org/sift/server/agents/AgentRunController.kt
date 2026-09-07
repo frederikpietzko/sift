@@ -15,7 +15,7 @@ import java.util.UUID
 
 /**
  * The literal `/api/v1/agents/watch` (SSE, `AgentWatchController`) is more specific than `/{id}` and wins the
- * mapping; the UUID pattern on `{id}` additionally guarantees `watch` can never be parsed as a run id (`400`)
+ * mapping; the UUID pattern on `{id}` additionally guarantees `watch` can never be parsed as a run id (`406`)
  * when a client omits the `text/event-stream` accept header.
  */
 @RestController

@@ -52,7 +52,7 @@ class ReviewStatusPublisher(
             commitSha = spec?.commitSha.orEmpty(),
             pullRequest = spec?.pullRequest,
             phase = (status.phase ?: Phase.CREATED).name,
-            reason = status.conditions.singleOrNull()?.reason,
+            reason = status.conditions.firstOrNull { it.type == READY_CONDITION }?.reason,
             message = status.message,
             startedAt = status.startedAt?.let(::instantOrNull),
             completedAt = status.completedAt?.let(::instantOrNull),
@@ -67,6 +67,7 @@ class ReviewStatusPublisher(
     }
 
     private companion object {
+        const val READY_CONDITION = "Ready"
         val log = LoggerFactory.getLogger(ReviewStatusPublisher::class.java)
     }
 }

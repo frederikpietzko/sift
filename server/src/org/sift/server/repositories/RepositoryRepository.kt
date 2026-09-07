@@ -10,6 +10,7 @@ import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.update
+import org.sift.server.agents.AgentPhase
 import org.sift.server.agents.AgentRunsTable
 import java.util.UUID
 import kotlin.uuid.toJavaUuid
@@ -81,6 +82,6 @@ class RepositoryRepository {
     }
 
     companion object {
-        val TERMINAL_PHASES: List<String> = listOf("SUCCESS", "FAILED", "CANCELLED")
+        val TERMINAL_PHASES: List<String> = AgentPhase.entries.filter { it.terminal }.map { it.name }
     }
 }

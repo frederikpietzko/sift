@@ -112,6 +112,18 @@ class AgentRunServiceTest {
     }
 
     @Test
+    fun `create rethrows the apply failure with the bookkeeping failure suppressed`() {
+        every { runs.update(any()) } throws IllegalStateException("db down")
+        every { adapter.apply(any(), request) } throws KubernetesClientException("forbidden")
+
+        val thrown = assertFailsWith<KubernetesClientException> { service.create(request) }
+
+        assertEquals("forbidden", thrown.message)
+        assertEquals(listOf("db down"), thrown.suppressed.map { it.message })
+        verify(exactly = 1) { runs.update(any()) }
+    }
+
+    @Test
     fun `create rejects an unknown repository before persisting anything`() {
         val unknown = UUID.randomUUID()
         every { repositories.get(unknown) } throws NotFoundException("Repository $unknown not found")

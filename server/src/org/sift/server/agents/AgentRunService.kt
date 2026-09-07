@@ -37,16 +37,21 @@ class AgentRunService(
         val created = transactions.execute { persistCreated(adapter, request) }
         val applied = runCatching { adapter.apply(created, request) }.getOrElse { exception ->
             log.warn("Applying {} for run {} failed", request.kind, created.id, exception)
-            transactions.execute {
-                runs.update(
-                    created.copy(
-                        phase = AgentPhase.FAILED,
-                        reason = REASON_APPLY_FAILED,
-                        message = exception.message,
-                        completedAt = now(),
-                        updatedAt = now(),
-                    ),
-                )
+            runCatching {
+                transactions.execute {
+                    runs.update(
+                        created.copy(
+                            phase = AgentPhase.FAILED,
+                            reason = REASON_APPLY_FAILED,
+                            message = exception.message,
+                            completedAt = now(),
+                            updatedAt = now(),
+                        ),
+                    )
+                }
+            }.onFailure { updateFailure ->
+                log.error("Recording apply failure for run {} failed", created.id, updateFailure)
+                exception.addSuppressed(updateFailure)
             }
             throw exception
         }
