@@ -236,7 +236,8 @@ def run_operator(cluster):
     env = os.environ.copy()
     env.update(KUBECONFIG=str(ROOT / ".kubeconfig"), SIFT_OPERATOR_NAMESPACE=NAMESPACE,
                SPRING_CONFIG_ADDITIONAL_LOCATION=(ROOT / "k8s/local/operator.yaml").as_uri())
-    for key in ("OPENAI_API_KEY", "SIFT_MODEL_PROXY_TOKEN", "SPRING_RABBITMQ_PASSWORD", "SIFT_REVIEW_AUTH_TOKEN"):
+    # The operator publishes CodeReview status events itself, so SPRING_RABBITMQ_PASSWORD stays in its environment.
+    for key in ("OPENAI_API_KEY", "SIFT_MODEL_PROXY_TOKEN", "SIFT_REVIEW_AUTH_TOKEN"):
         env.pop(key, None)
     print("Starting operator with HOST kubeconfig identity", flush=True)
     os.chdir(ROOT)

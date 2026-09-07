@@ -4,7 +4,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.verifyOrder
-import org.sift.agents.shared.messaging.EventPublisher
+import org.sift.messaging.EventPublisher
 import org.sift.events.CodeReviewCompletedEvent
 import org.springframework.boot.DefaultApplicationArguments
 import java.nio.file.Files

@@ -1,13 +1,42 @@
 product: jvm/app
+apply:
+  - //config/detekt.module-template.yaml
+  - //config/spring.module-template.yaml
 
 settings:
-  springBoot: enabled
   jvm:
-    mainClass: org.jetbrains.amper.spring.MainKt
+    mainClass: org.sift.server.MainKt
+    # Spring Boot defaults to classes mode for DevTools restarts, but that packages
+    # local module outputs as BOOT-INF/lib directories the Boot loader cannot load
+    # (KTC-5686). Jars mode is required for a startable executable-jar.
+    runtimeClasspathMode: jars
 
 dependencies:
   - $kotlin.reflect
-  - $spring.boot.starter
+  - $spring.boot.starter.web
+  - $spring.boot.starter.validation
+  - $spring.boot.starter.actuator
+  - $spring.boot.starter.amqp
+  - $libs.spring.boot.starter.flyway
+  - $libs.flyway.database.postgresql
+  - $libs.postgresql
+  - $libs.exposed.spring.boot4.starter
+  - $libs.exposed.jdbc
+  - $libs.exposed.json
+  - $libs.exposed.java.time
+  - $libs.kotlinx.coroutines.reactor
+  - $libs.jackson.module.kotlin
+  - $libs.fabrics8.kubernetes.client
+  - //k8s/crds
+  - //messaging
 
 test-dependencies:
   - $spring.boot.starter.test
+  - $libs.spring.boot.webmvc.test
+  - $libs.mockk
+  - $libs.springmockk
+  - $libs.spring.boot.testcontainers
+  - $libs.testcontainers.postgresql
+  - $libs.testcontainers.rabbitmq
+  - $libs.testcontainers.junit.jupiter
+  - $libs.fabrics8.kubernetes.server.mock

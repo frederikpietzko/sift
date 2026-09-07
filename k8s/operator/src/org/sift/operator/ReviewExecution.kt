@@ -57,9 +57,26 @@ class ReviewExecution(private val review: CodeReview) {
                 uri.userInfo == null && uri.query == null && uri.fragment == null) {
                 "Repository must be an HTTP(S) URL without embedded credentials, query or fragment"
             }
+            spec.credentialsSecretRef?.let(::validateSecretRef)
         }
+
+        private fun validateSecretRef(reference: CodeReview.SecretKeySelector) {
+            // Fabric8 deserializes through the no-arg constructor, so Kotlin defaults may not have been applied.
+            val name: String? = reference.name
+            val key: String? = reference.key
+            require(name != null && name.length <= DNS_SUBDOMAIN_MAX_LENGTH && DNS_SUBDOMAIN.matches(name)) {
+                "Credentials Secret name must be a valid DNS-1123 subdomain"
+            }
+            require(!key.isNullOrBlank() && !key.contains(Regex("\\s")) && !key.contains("\${")) {
+                "Credentials Secret key must be a nonblank literal"
+            }
+        }
+
+        private val DNS_SUBDOMAIN = Regex("[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
     }
 }
+
+private const val DNS_SUBDOMAIN_MAX_LENGTH = 253
 
 private const val UID_HASH_BYTES = 8
 private const val NAME_PREFIX_LENGTH = 20

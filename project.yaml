@@ -6,6 +6,7 @@ modules:
   - events
   - k8s/crds
   - k8s/operator
+  - messaging
   - server
 
 plugins:

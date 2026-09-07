@@ -21,6 +21,27 @@ resource-version-guarded status writes protect against stale events and replay. 
 [ADR 0008](../adrs/0008-generation-safe-review-lifecycle.md). This implements the operator
 lifecycle, not the agent's external SHA/event contract or final published-image gate.
 
+### Status events
+
+`CodeReviewReconciler.save()` is the only status writer. After every successful `updateStatus()`
+it calls `ReviewStatusPublisher`, which publishes a `CodeReviewStatusChangedEvent` (routing key
+`code-review.status`, exchange `sift.events`) through the shared [`messaging`](messaging.md)
+module. The event carries the CR identity (`reviewName`, `reviewNamespace`, `reviewUid`,
+`generation`, `executionId`), a spec snapshot, `phase`, the `Ready` condition `reason`,
+`message`, `startedAt`/`completedAt` and the operator's `observedAt` instant. Publishing is best
+effort: an `AmqpException` is logged and never fails the reconciliation, because the cluster
+status is the source of truth. Unchanged status is not republished. The Sift Server consumes
+these events to maintain its `agent_runs` read model; see
+[ADR 0011](../adrs/0011-operator-status-events-via-rabbitmq.md).
+
+Broker connection settings come from `spring.rabbitmq.*` in `application.yaml`, bound to
+`SPRING_RABBITMQ_HOST` (`localhost`), `SPRING_RABBITMQ_PORT` (`5672`), `SPRING_RABBITMQ_USERNAME`
+(`sift`), `SPRING_RABBITMQ_PASSWORD` (empty) and `SPRING_RABBITMQ_VIRTUAL_HOST` (`/`), with a 5s
+connection timeout and three exponential template retries. These are the operator's **own**
+connection; the `sift.operator.services.rabbitmq-*` properties below still describe the broker
+review Jobs connect to from inside the cluster. The `dev.py run` helper keeps
+`SPRING_RABBITMQ_PASSWORD` in the operator environment while still stripping model and Git tokens.
+
 ## Trusted operator configuration
 
 `k8s/operator/resources/application.yaml` defines `sift.operator.review.image`. Its default
@@ -76,9 +97,16 @@ The `sift.org/v1alpha1`, namespaced `CodeReview` preserves `repositoryUrl`, `bra
 optional string `pullRequest`, and phases `CREATED`, `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`.
 It now requires `baseBranch` and a full 40-character hexadecimal `commitSha`. Repository
 and branch fields must be nonempty and contain no whitespace. Prefer lowercase Git SHAs;
-the schema accepts either hexadecimal case. No credentials belong in a CR. Provisioning
+the schema accepts either hexadecimal case. No credential values belong in a CR. Provisioning
 accepts HTTP(S) repositories without userinfo, query or fragment, and rejects Spring
 placeholders in CR fields so untrusted values cannot expand into Secret environment values.
+
+An optional `spec.credentialsSecretRef` (`{name, key}`, `key` defaults to `token`) names a
+Secret in the CodeReview's namespace that holds the repository's Git token; the Sift Server
+maintains these Secrets as `sift-repo-<repository id>`
+([ADR 0012](../adrs/0012-server-managed-repository-credentials.md)). Validation rejects
+references whose `name` is not a DNS-1123 subdomain or whose `key` is blank, contains
+whitespace or a Spring placeholder.
 
 Each `metadata.generation` represents one execution, identified by
 `<metadata.uid>:<metadata.generation>`. Reapplying an unchanged spec does not request a new
@@ -205,6 +233,10 @@ Java temporary/home paths and the working directory point to writable scratch lo
 | `proxy-token` | `SIFT_MODEL_PROXY_TOKEN` |
 | `rabbitmq-password` | `SPRING_RABBITMQ_PASSWORD` |
 | `git-token` | `SIFT_REVIEW_AUTH_TOKEN` |
+
+When the CR carries `spec.credentialsSecretRef`, `SIFT_REVIEW_AUTH_TOKEN` is taken from that
+reference instead of the cluster-wide `git-token`; without it the operator falls back to
+`git-token`, and with neither the variable is not injected at all.
 
 No Secret contents are read by the operator; references are non-optional when configured.
 Nonsecret model, web-search and RabbitMQ properties use explicit YAML serialization.

@@ -168,6 +168,29 @@ Jobs remain immutable. Do not activate `local`. Review Jobs retain their indepen
 validated mandatory `SPRING_CONFIG_ADDITIONAL_LOCATION=file:/etc/sift/review/application.yaml`;
 no second agent location variable is introduced.
 
+## Running the server locally
+
+The [server](server.md) can run on the host next to the operator. It uses the Compose Postgres
+and RabbitMQ directly (`localhost:5432` / `localhost:5672`, defaults in
+`server/resources/application.yaml`) and the same host `.kubeconfig` as the operator to create
+`CodeReview` CRs and `sift-repo-*` Secrets in `sift-dev`:
+
+```shell
+docker compose up -d postgres rabbitmq
+KUBECONFIG="$PWD/.kubeconfig" SIFT_SERVER_NAMESPACE=sift-dev \
+  SIFT_SERVER_ENCRYPTION_KEY=$(openssl rand -base64 32) ./kotlin run --module server
+```
+
+As with the operator, the host JVM authenticates with the root kubeconfig, not with the
+`sift-server` ServiceAccount. `k8s/manifests/server/rbac.yaml` (ServiceAccount, Role,
+RoleBinding) is what an **in-cluster** deployment uses; `configmap.yaml`, `deployment.yaml`
+and `service.yaml` in the same directory complete it and expect an administrator-created
+`sift-server-secrets` Secret (see [server deployment](server.md#deployment)). The
+operator's `SPRING_RABBITMQ_*` settings and the server's must point at the same broker so
+`code-review.status`/`code-review.completed` events reach the server's queues. The API has no
+authentication ([ADR 0014](../adrs/0014-defer-server-api-authentication.md)); on a shared
+host add `SERVER_ADDRESS=127.0.0.1` so it only listens on loopback.
+
 ## Manual CodeReview application
 
 After external SHA-pinned checkout/event identity support and the published image are

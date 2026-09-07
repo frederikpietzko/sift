@@ -1,0 +1,18 @@
+# Non-secret runtime configuration of the Sift Server. Secrets (database/RabbitMQ passwords,
+# token encryption key) come from the `sift-server-secrets` Secret referenced in deployment.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sift-server
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/name: sift-server
+    app.kubernetes.io/managed-by: sift-local-dev
+data:
+  SIFT_SERVER_NAMESPACE: sift-dev
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sift
+  SPRING_DATASOURCE_USERNAME: sift
+  SPRING_RABBITMQ_HOST: rabbitmq
+  SPRING_RABBITMQ_PORT: '5672'
+  SPRING_RABBITMQ_USERNAME: sift
+  SPRING_RABBITMQ_VIRTUAL_HOST: /

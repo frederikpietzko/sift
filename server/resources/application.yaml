@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: sift-server
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/sift}
+    username: ${SPRING_DATASOURCE_USERNAME:sift}
+    password: ${SPRING_DATASOURCE_PASSWORD:sift}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:sift}
+    password: ${SPRING_RABBITMQ_PASSWORD:sift}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:/}
+    connection-timeout: 5s
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1s
+        multiplier: 2.0
+        max-retries: 3
+    listener:
+      simple:
+        acknowledge-mode: auto
+        default-requeue-rejected: false
+  exposed:
+    generate-ddl: false
+    show-sql: false
+  flyway:
+    enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
+    async:
+      # SSE watch streams are open-ended; the container must not time out async requests.
+      request-timeout: -1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+sift:
+  server:
+    namespace: ${SIFT_SERVER_NAMESPACE:sift-dev}
+    encryption-key: ${SIFT_SERVER_ENCRYPTION_KEY}

@@ -3,8 +3,8 @@ package org.sift.agents.bootstrap
 import io.mockk.mockk
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
-import org.sift.agents.shared.messaging.EventPublisher
-import org.sift.agents.shared.messaging.RabbitEventPublisher
+import org.sift.messaging.EventPublisher
+import org.sift.messaging.RabbitEventPublisher
 import org.sift.agents.shared.tools.SearxngProperties
 import org.sift.agents.shared.tools.SearxngSearchTool
 import org.springframework.amqp.core.TopicExchange

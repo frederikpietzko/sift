@@ -1,0 +1,14 @@
+product: jvm/lib
+apply:
+  - //config/detekt.module-template.yaml
+  - //config/spring.module-template.yaml
+
+dependencies:
+  - $spring.boot.starter
+  - $spring.boot.starter.amqp: exported
+  - $libs.jackson.module.kotlin
+  - //events: exported
+
+test-dependencies:
+  - $spring.boot.starter.test
+  - $libs.mockk

@@ -8,6 +8,9 @@ import io.mockk.mockk
 import io.mockk.verify
 import org.sift.crds.CodeReview
 import org.sift.crds.Phase
+import org.sift.events.CodeReviewStatusChangedEvent
+import org.sift.messaging.EventPublisher
+import org.springframework.amqp.AmqpConnectException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -21,7 +24,9 @@ class CodeReviewReconcilerTest {
     private val resources = ReviewResources(properties, ReviewConfiguration(properties))
     private val config = ReviewConfigMapDependent(resources)
     private val job = ReviewJobDependent(resources)
-    private val reconciler = CodeReviewReconciler(policy, config, job, ReviewStatusProjection())
+    private val eventPublisher = mockk<EventPublisher>(relaxUnitFun = true)
+    private val statusPublisher = ReviewStatusPublisher(eventPublisher)
+    private val reconciler = CodeReviewReconciler(policy, config, job, ReviewStatusProjection(), statusPublisher)
     private val observation = ReviewObservation(
         job = resources.job(review).apply { metadata.uid = "job-uid" },
         configMap = resources.configMap(review).apply { metadata.uid = "config-uid" },
@@ -45,6 +50,35 @@ class CodeReviewReconcilerTest {
         assertNull(review.status?.executionId)
         verify(exactly = 0) { policy.observe(any(), any()) }
         verify(exactly = 0) { context.client }
+        verify(exactly = 0) { eventPublisher.publish(any()) }
+    }
+
+    @Test
+    fun `a persisted status change is published once and an unchanged status is not republished`() {
+        reconciler.reconcile(review, context)
+        reconciler.reconcile(review, context)
+        verify(exactly = 1) { statusResource.updateStatus() }
+        verify(exactly = 1) {
+            eventPublisher.publish(match<CodeReviewStatusChangedEvent> {
+                it.reviewUid == review.metadata.uid && it.phase == review.status.phase?.name &&
+                    it.executionId == review.status.executionId
+            })
+        }
+    }
+
+    @Test
+    fun `a failed status write is not published`() {
+        every { statusResource.updateStatus() } throws KubernetesClientException("status conflict", 409, null)
+        assertFailsWith<KubernetesClientException> { reconciler.reconcile(review, context) }
+        verify(exactly = 0) { eventPublisher.publish(any()) }
+    }
+
+    @Test
+    fun `a failed publication never fails the reconciliation`() {
+        every { eventPublisher.publish(any()) } throws AmqpConnectException(RuntimeException("broker unavailable"))
+        reconciler.reconcile(review, context)
+        assertEquals(Phase.PENDING, review.status.phase)
+        verify(exactly = 1) { statusResource.updateStatus() }
     }
 
     @Test
@@ -56,7 +90,7 @@ class CodeReviewReconcilerTest {
         val expected = review.status
         review.status = initialStatus
         every { statusResource.updateStatus() } returns review
-        val restarted = CodeReviewReconciler(policy, config, job, ReviewStatusProjection())
+        val restarted = CodeReviewReconciler(policy, config, job, ReviewStatusProjection(), statusPublisher)
         restarted.reconcile(review, context)
         assertEquals(expected.executionId, review.status.executionId)
         assertEquals(expected.jobRef, review.status.jobRef)

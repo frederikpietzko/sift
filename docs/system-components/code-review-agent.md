@@ -37,9 +37,10 @@ result is not lost) and the exception is rethrown.
 
 ## Configuration Reference
 
-The `agents/shared` dependency automatically registers messaging and web-search infrastructure
-through Spring Boot auto-configuration; no shared-package component scan or explicit import is
-needed. Applications can provide their own `EventPublisher`, AMQP `MessageConverter`, or
+The `agents/shared` dependency (re-exporting the [`messaging`](messaging.md) module) automatically
+registers messaging and web-search infrastructure through Spring Boot auto-configuration; no
+shared-package component scan or explicit import is needed. Applications can provide their own
+`EventPublisher`, AMQP `MessageConverter`, or
 `SearxngSearchTool` bean to replace a default, or a bean named `siftEventsExchange` to replace the
 exchange. Connection settings still come from application configuration and profiles
 (see [ADR 0003](../adrs/0003-auto-configure-shared-agent-infrastructure.md)).

@@ -13,6 +13,7 @@ dependencies:
   - $spring.boot.starter.validation
   - $libs.spring.operator.framework
   - //k8s/crds
+  - //messaging
 
 test-dependencies:
   - $spring.boot.starter.test

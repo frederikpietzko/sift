@@ -35,7 +35,7 @@ class ReviewResources(
             .withFsGroup(REVIEW_USER_ID).withNewSeccompProfile().withType("RuntimeDefault").endSeccompProfile()
             .endSecurityContext()
             .addNewContainer().withName("review").withImage(settings.image).withImagePullPolicy("IfNotPresent")
-            .withWorkingDir("/scratch").withEnv(environment())
+            .withWorkingDir("/scratch").withEnv(environment(review))
             .withNewSecurityContext().withAllowPrivilegeEscalation(false).withReadOnlyRootFilesystem(true)
             .withNewCapabilities().withDrop("ALL").endCapabilities().endSecurityContext()
             .withNewResources()
@@ -76,7 +76,7 @@ class ReviewResources(
         }
     }
 
-    private fun environment(): List<EnvVar> {
+    private fun environment(review: CodeReview): List<EnvVar> {
         val secrets = properties.secrets
         val plain = mapOf(
             "SPRING_CONFIG_ADDITIONAL_LOCATION" to "file:/etc/sift/review/application.yaml",
@@ -88,9 +88,14 @@ class ReviewResources(
             secret("OPENAI_API_KEY", secrets.modelApiKey),
             secret("SIFT_MODEL_PROXY_TOKEN", secrets.proxyToken),
             secret("SPRING_RABBITMQ_PASSWORD", secrets.rabbitmqPassword),
-            secret("SIFT_REVIEW_AUTH_TOKEN", secrets.gitToken),
+            secret("SIFT_REVIEW_AUTH_TOKEN", gitToken(review)),
         )
     }
+
+    /** Per-repository credentials referenced by the CR take precedence over the cluster-wide `gitToken`. */
+    private fun gitToken(review: CodeReview): OperatorProperties.SecretKeyReference? =
+        review.spec.credentialsSecretRef?.let { OperatorProperties.SecretKeyReference(name = it.name, key = it.key) }
+            ?: properties.secrets.gitToken
 
     private fun secret(name: String, reference: OperatorProperties.SecretKeyReference?): EnvVar? = reference?.let {
         EnvVarBuilder().withName(name).withNewValueFrom().withNewSecretKeyRef()

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonEnumDefaultValue
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import io.fabric8.crd.generator.annotation.PrinterColumn
+import io.fabric8.generator.annotation.Default
 import io.fabric8.generator.annotation.Pattern
 import io.fabric8.generator.annotation.Required
 import io.fabric8.kubernetes.api.model.Condition
@@ -38,6 +39,22 @@ class CodeReview : CustomResource<CodeReview.Spec, CodeReview.Status>(), Namespa
         @field:Required val commitSha: String,
         @field:JsonPropertyDescription("The pull request number of the repository that needs to be reviewed.")
         val pullRequest: String? = null,
+        @field:JsonPropertyDescription(
+            "Optional reference to a Secret key in the CodeReview's namespace holding the Git access token.",
+        )
+        val credentialsSecretRef: SecretKeySelector? = null,
+    )
+
+    @NoArg
+    @JsonClassDescription("SecretKeySelector")
+    data class SecretKeySelector(
+        @field:JsonPropertyDescription("The name of the Secret in the CodeReview's namespace.")
+        @field:Pattern("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+        @field:Required val name: String,
+        @field:JsonPropertyDescription("The key within the Secret whose value is the access token.")
+        @field:Pattern("^\\S+$")
+        @field:Default("token")
+        val key: String = "token",
     )
 
     @NoArg

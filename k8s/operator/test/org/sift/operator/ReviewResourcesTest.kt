@@ -137,6 +137,49 @@ class ReviewResourcesTest {
     }
 
     @Test
+    fun `CR credentials secret reference overrides the cluster wide git token`() {
+        val review = reviewFixture()
+        review.spec = review.spec.copy(
+            credentialsSecretRef = CodeReview.SecretKeySelector(name = "sift-repo-42", key = "token"),
+        )
+        val env = resources.job(review).spec.template.spec.containers.single().env
+        val variable = env.single { it.name == "SIFT_REVIEW_AUTH_TOKEN" }
+        assertNull(variable.value)
+        assertEquals("sift-repo-42", variable.valueFrom.secretKeyRef.name)
+        assertEquals("token", variable.valueFrom.secretKeyRef.key)
+        assertEquals(false, variable.valueFrom.secretKeyRef.optional)
+        assertFalse(resources.configMap(review).data.getValue("application.yaml").contains("sift-repo-42"))
+    }
+
+    @Test
+    fun `without a CR credentials reference or cluster wide git token no auth token is injected`() {
+        val unauthenticated = properties.copy(secrets = properties.secrets.copy(gitToken = null))
+        val env = ReviewResources(unauthenticated, ReviewConfiguration(unauthenticated))
+            .job(reviewFixture()).spec.template.spec.containers.single().env
+        assertFalse(env.any { it.name == "SIFT_REVIEW_AUTH_TOKEN" })
+    }
+
+    @Test
+    fun `invalid credentials secret references are rejected`() {
+        val review = reviewFixture()
+        listOf(
+            CodeReview.SecretKeySelector(name = "Not_Valid", key = "token"),
+            CodeReview.SecretKeySelector(name = "-leading", key = "token"),
+            CodeReview.SecretKeySelector(name = "a".repeat(254), key = "token"),
+            CodeReview.SecretKeySelector(name = "sift-repo-42", key = " "),
+            CodeReview.SecretKeySelector(name = "sift-repo-42", key = "\${OPENAI_API_KEY}"),
+        ).forEach {
+            review.spec = review.spec.copy(credentialsSecretRef = it)
+            assertFailsWith<IllegalArgumentException>(it.toString()) { resources.job(review) }
+        }
+        review.spec = review.spec.copy(
+            credentialsSecretRef = CodeReview.SecretKeySelector(name = "sift.repo-42", key = "token"),
+        )
+        assertEquals("sift.repo-42", resources.job(review).spec.template.spec.containers.single().env
+            .single { it.name == "SIFT_REVIEW_AUTH_TOKEN" }.valueFrom.secretKeyRef.name)
+    }
+
+    @Test
     fun `foreign ownership and generation are rejected even with deterministic names`() {
         val review = reviewFixture()
         val job = resources.job(review)

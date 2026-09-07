@@ -3,6 +3,19 @@ spring:
     name: sift-operator
   main:
     web-application-type: none
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:sift}
+    password: ${SPRING_RABBITMQ_PASSWORD:}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:/}
+    connection-timeout: 5s
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1s
+        multiplier: 2.0
+        max-retries: 3
 
 javaoperatorsdk:
   crd:

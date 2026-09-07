@@ -109,7 +109,8 @@ class HelperTest(unittest.TestCase):
         self.assertEqual([command, "run", "--module", "operator"], arguments)
         self.assertEqual(str(dev.ROOT / ".kubeconfig"), environment["KUBECONFIG"])
         self.assertEqual((dev.ROOT / "k8s/local/operator.yaml").as_uri(), environment["SPRING_CONFIG_ADDITIONAL_LOCATION"])
-        self.assertFalse({"OPENAI_API_KEY", "SIFT_MODEL_PROXY_TOKEN", "SPRING_RABBITMQ_PASSWORD"} & environment.keys())
+        self.assertFalse({"OPENAI_API_KEY", "SIFT_MODEL_PROXY_TOKEN"} & environment.keys())
+        self.assertEqual("secret-rabbit", environment["SPRING_RABBITMQ_PASSWORD"])
         self.assertNotIn("SPRING_CONFIG_LOCATION", environment)
         self.assertNotIn("SPRING_PROFILES_ACTIVE", environment)
 

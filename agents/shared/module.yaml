@@ -8,9 +8,8 @@ dependencies:
   - org.springframework:spring-web
   - bom: $libs.spring.ai.bom
   - $libs.spring.ai.openai.starter
-  - $spring.boot.starter.amqp
   - $libs.jackson.module.kotlin
-  - //events: exported
+  - //messaging: exported
 
 test-dependencies:
   - $spring.boot.starter.test

@@ -18,6 +18,7 @@ class CodeReviewReconciler(
     private val configMap: ReviewConfigMapDependent,
     private val job: ReviewJobDependent,
     private val projection: ReviewStatusProjection,
+    private val statusPublisher: ReviewStatusPublisher,
 ) : Reconciler<CodeReview> {
     private val workflow = WorkflowBuilder<CodeReview>()
         .addDependentResource(configMap)
@@ -85,6 +86,7 @@ class CodeReviewReconciler(
             resource.status = status
             // Status and spec share resourceVersion: a concurrent spec change must reject this write.
             context.client.resource(resource).lockResourceVersion(resource.metadata.resourceVersion).updateStatus()
+            statusPublisher.publish(resource, status)
         }
         return requeue()
     }

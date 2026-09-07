@@ -2,6 +2,8 @@
 fabrics8 = "7.8.0"
 spring-operator-starter = "6.6.0"
 spring-ai-bom = "2.0.1"
+exposed = "1.5.0"
+testcontainers = "2.0.5"
 
 [libraries]
 spring-ai-bom = { module = "org.springframework.ai:spring-ai-bom", version.ref = "spring-ai-bom" }
@@ -13,6 +15,21 @@ fabrics-generator-apt = { module = "io.fabric8:crd-generator-apt", version.ref =
 fabrics8-kubernetes-client = { module = "io.fabric8:kubernetes-client", version.ref = "fabrics8" }
 fabrics-crd-generator-api = { module = "io.fabric8:crd-generator-api-v2", version.ref = "fabrics8" }
 fabrics-generator-collector = { module = "io.fabric8:crd-generator-collector", version.ref = "fabrics8" }
+fabrics8-kubernetes-server-mock = { module = "io.fabric8:kubernetes-server-mock", version.ref = "fabrics8" }
+
+exposed-spring-boot4-starter = { module = "org.jetbrains.exposed:exposed-spring-boot4-starter", version.ref = "exposed" }
+exposed-jdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+exposed-json = { module = "org.jetbrains.exposed:exposed-json", version.ref = "exposed" }
+exposed-java-time = { module = "org.jetbrains.exposed:exposed-java-time", version.ref = "exposed" }
+spring-boot-starter-flyway = { module = "org.springframework.boot:spring-boot-starter-flyway" }
+flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql" }
+postgresql = { module = "org.postgresql:postgresql" }
+kotlinx-coroutines-reactor = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-reactor" }
+spring-boot-testcontainers = { module = "org.springframework.boot:spring-boot-testcontainers" }
+spring-boot-webmvc-test = { module = "org.springframework.boot:spring-boot-webmvc-test" }
+testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
+testcontainers-rabbitmq = { module = "org.testcontainers:testcontainers-rabbitmq", version.ref = "testcontainers" }
+testcontainers-junit-jupiter = { module = "org.testcontainers:testcontainers-junit-jupiter", version.ref = "testcontainers" }
 
 spring-ai-ollama-starter = { module = "org.springframework.ai:spring-ai-starter-model-ollama" }
 spring-ai-openai-starter = { module = "org.springframework.ai:spring-ai-starter-model-openai" }

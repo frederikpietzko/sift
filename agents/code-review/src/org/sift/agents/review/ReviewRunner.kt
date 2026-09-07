@@ -1,6 +1,6 @@
 package org.sift.agents.review
 
-import org.sift.agents.shared.messaging.EventPublisher
+import org.sift.messaging.EventPublisher
 import org.sift.events.CodeReviewCompletedEvent
 import org.slf4j.LoggerFactory
 import org.springframework.boot.ApplicationArguments

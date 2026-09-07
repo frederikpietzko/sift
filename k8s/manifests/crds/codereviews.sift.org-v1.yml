@@ -44,6 +44,23 @@ spec:
                   \ to review."
                 pattern: "^[0-9a-fA-F]{40}$"
                 type: "string"
+              credentialsSecretRef:
+                description: "Optional reference to a Secret key in the CodeReview's\
+                  \ namespace holding the Git access token."
+                properties:
+                  key:
+                    default: "token"
+                    description: "The key within the Secret whose value is the access\
+                      \ token."
+                    pattern: "^\\S+$"
+                    type: "string"
+                  name:
+                    description: "The name of the Secret in the CodeReview's namespace."
+                    pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                    type: "string"
+                required:
+                - "name"
+                type: "object"
               pullRequest:
                 description: "The pull request number of the repository that needs\
                   \ to be reviewed."

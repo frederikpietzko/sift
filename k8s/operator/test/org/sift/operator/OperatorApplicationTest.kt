@@ -5,6 +5,7 @@ import io.javaoperatorsdk.operator.Operator
 import io.javaoperatorsdk.operator.springboot.starter.CRDApplier
 import io.javaoperatorsdk.operator.springboot.starter.OperatorConfigurationProperties
 import io.javaoperatorsdk.operator.springboot.starter.OperatorStarter
+import org.sift.messaging.EventPublisher
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import kotlin.test.Test
@@ -24,6 +25,7 @@ class OperatorApplicationTest {
             .withPropertyValues(
                 "sift.operator.namespace=sift-test",
                 "sift.operator.review.image=registry.example.org/review:wiring-test",
+                "spring.rabbitmq.dynamic=false",
             )
             .run { context ->
                 assertNull(context.startupFailure)
@@ -38,6 +40,8 @@ class OperatorApplicationTest {
                 assertNotNull(context.getBean(CodeReviewReconciler::class.java))
                 assertNotNull(context.getBean(ReviewConfigMapDependent::class.java))
                 assertNotNull(context.getBean(ReviewJobDependent::class.java))
+                assertNotNull(context.getBean(ReviewStatusPublisher::class.java))
+                assertEquals(1, context.getBeansOfType(EventPublisher::class.java).size)
             }
     }
 }

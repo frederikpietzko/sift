@@ -58,6 +58,20 @@ class CodeReviewSchemaTest {
     }
 
     @Test
+    fun `spec exposes an optional credentials secret reference with a defaulted key`() {
+        val spec = schema.properties.getValue("spec")
+        assertFalse("credentialsSecretRef" in spec.required)
+        val reference = spec.properties.getValue("credentialsSecretRef")
+        assertEquals("object", reference.type)
+        assertEquals(listOf("name"), reference.required)
+        assertEquals("string", reference.properties.getValue("name").type)
+        assertEquals("token", reference.properties.getValue("key").default.asText())
+        val namePattern = Regex(reference.properties.getValue("name").pattern)
+        assertTrue(namePattern.matches("sift-repo-9b2c0c8e-1f4e-4c21-a9c8-4b1b5e1f8d10"))
+        listOf("", "Upper", "-leading", "has space").forEach { assertFalse(namePattern.matches(it), it) }
+    }
+
+    @Test
     fun `status preserves phases and exposes execution identity resource UIDs and conditions`() {
         assertEquals("Namespaced", crd.spec.scope)
         assertEquals("v1alpha1", version.name)
@@ -92,6 +106,7 @@ class CodeReviewSchemaTest {
                 baseBranch = "main",
                 commitSha = "a".repeat(40),
                 pullRequest = "1",
+                credentialsSecretRef = CodeReview.SecretKeySelector(name = "sift-repo-42", key = "token"),
             )
             status = CodeReview.Status(
                 phase = Phase.SUCCESS,

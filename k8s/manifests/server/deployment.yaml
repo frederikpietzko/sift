@@ -1,0 +1,83 @@
+# Requires: the `sift-server` ServiceAccount/Role/RoleBinding (rbac.yaml), the `sift-server`
+# ConfigMap (configmap.yaml) and an administrator-provisioned Secret `sift-server-secrets` with the
+# keys `datasource-password`, `rabbitmq-password` and `encryption-key`, e.g.:
+#
+#   kubectl -n sift-dev create secret generic sift-server-secrets \
+#     --from-literal=datasource-password="$PGPASSWORD" \
+#     --from-literal=rabbitmq-password="$RABBITMQ_PASSWORD" \
+#     --from-literal=encryption-key="$(openssl rand -base64 32)"
+#
+# The Secret is intentionally not part of these manifests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sift-server
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/name: sift-server
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  # The server holds one extra LISTEN connection per replica; keep a single replica until the
+  # SSE watch fan-out has been validated with several instances.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sift-server
+  template:
+    metadata:
+      labels:
+        app: sift-server
+        app.kubernetes.io/name: sift-server
+    spec:
+      serviceAccountName: sift-server
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          # Placeholder: no server image is published yet. Replace with the digest-pinned image
+          # produced by the server image workflow before deploying to a shared cluster.
+          image: jbfpietzko/sift-server:latest
+          ports:
+            - {name: http, containerPort: 8080}
+          envFrom:
+            - configMapRef:
+                name: sift-server
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: sift-server-secrets, key: datasource-password}
+            - name: SPRING_RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: sift-server-secrets, key: rabbitmq-password}
+            - name: SIFT_SERVER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: sift-server-secrets, key: encryption-key}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: '1', memory: 1Gi}
+          startupProbe:
+            httpGet: {path: /actuator/health/liveness, port: http}
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

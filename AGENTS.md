@@ -22,6 +22,8 @@ Kotlin Toolchain multi-module build.
     - shared: Kotlin, Spring AI; Shared code for agents, eg common advisors
     - code-review: Kotlin, Spring Boot 4, Spring AI; agent to perform code review
     - security-review: Kotlin, Spring Boot 4, Spring AI; agent to perform security review
+- events: Kotlin; shared event contracts (`SiftEvent`, `CodeReviewCompletedEvent`, `CodeReviewStatusChangedEvent`)
+- messaging: Kotlin, Spring AMQP; shared RabbitMQ publisher/auto-configuration used by agents, operator and server
 - server: Kotlin, Spring Boot 4, fabric8-client; applies CRs to cluster, exposes API to FE
 - UI out of scope atm
 

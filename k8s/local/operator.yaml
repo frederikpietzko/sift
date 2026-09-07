@@ -1,4 +1,12 @@
 # Additional host-operator configuration, never the agent's local profile.
+# The host-run operator publishes CodeReview status events to the compose.yaml RabbitMQ on localhost;
+# the password comes from SPRING_RABBITMQ_PASSWORD in the operator's environment (see dev.py run).
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: sift
+    virtual-host: /
 sift:
   operator:
     namespace: sift-dev
