@@ -1,0 +1,16 @@
+product: jvm/lib
+apply:
+  - //config/detekt.module-template.yaml
+
+# End-to-end harness: bootstraps kind + Compose + host JVMs and drives the server API.
+# Helpers live in `src` so they are detekt-checked and unit-testable; scenarios live in `test`
+# and are gated behind SIFT_E2E=true. The module intentionally does NOT depend on //server
+# or //k8s/operator: both run as real child processes.
+dependencies:
+  - $libs.fabrics8.kubernetes.client
+  - //k8s/crds
+  # No Spring BOM here, so pin Jackson 3 and the JDBC driver explicitly (same as //events tests).
+  - tools.jackson.module:jackson-module-kotlin:3.1.1
+  - org.postgresql:postgresql:42.7.13
+  - $libs.awaitility
+  - $libs.junit.jupiter

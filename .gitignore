@@ -3,3 +3,5 @@
 build
 .junie/
 **/__pycache__/
+tools/*.env
+!tools/*.env.example

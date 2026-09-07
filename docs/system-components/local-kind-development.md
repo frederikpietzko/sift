@@ -5,6 +5,11 @@ fixed-upstream ClusterIP Services in `sift-dev`. This workflow does not create/r
 cluster, replace kubeconfig, install CRDs automatically, create per-review infrastructure,
 or run a server API. See [ADR 0009](../adrs/0009-local-kind-connectivity.md).
 
+For an automated, self-bootstrapping proof of the whole platform use the
+[end-to-end tests](e2e-tests.md) instead: the `e2e` module owns a **separate** `sift-e2e` kind
+cluster (`build/e2e/kubeconfig`), starts Compose, operator and server itself, and never touches
+the `.kubeconfig`/`kind-kind` setup described here ([ADR 0015](../adrs/0015-e2e-harness-dedicated-kind-cluster.md)).
+
 ## Prerequisites and setup
 
 Run from the repository root with Python 3.10+, `kubectl`, `kind`, Docker Desktop, and

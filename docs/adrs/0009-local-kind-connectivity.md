@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended by [ADR 0015](0015-e2e-harness-dedicated-kind-cluster.md): the automated
+e2e harness may create and own the separate `sift-e2e` kind cluster with its kubeconfig at
+`build/e2e/kubeconfig`; the rules below still apply to the root `.kubeconfig` and `kind-kind`.
 
 ## Context
 
