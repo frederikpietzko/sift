@@ -8,6 +8,7 @@ import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.jdbc.Query
 import org.jetbrains.exposed.v1.jdbc.andWhere
 import org.jetbrains.exposed.v1.jdbc.batchInsert
+import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insertIgnore
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -23,6 +24,7 @@ import kotlin.uuid.toKotlinUuid
 
 /** Blocking Exposed DSL access to `review_results` and `review_findings`; callers own the Spring transaction. */
 @org.springframework.stereotype.Repository
+@Suppress("TooManyFunctions") // one query per access pattern of `review_results`/`review_findings`
 class ReviewResultRepository {
     /**
      * Inserts the result with `ON CONFLICT DO NOTHING` on the unique `execution_id` and its findings only when
@@ -56,6 +58,10 @@ class ReviewResultRepository {
         }
         return inserted
     }
+
+    /** Deletes every result of the run (findings cascade in the schema); returns the number of results. */
+    fun deleteByAgentRunId(agentRunId: UUID): Int =
+        ReviewResultsTable.deleteWhere { ReviewResultsTable.agentRunId eq agentRunId.toKotlinUuid() }
 
     fun findById(id: UUID): ReviewResult? = ReviewResultsTable.selectAll()
         .where { ReviewResultsTable.id eq id.toKotlinUuid() }

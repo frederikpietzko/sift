@@ -26,6 +26,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
@@ -259,6 +260,25 @@ class AgentRunControllerTest {
             jsonPath("$.reason") { value("CancelledByUser") }
         }
         verify(exactly = 1) { service.cancel(id) }
+    }
+
+    @Test
+    fun `DELETE removes the run and returns 204, unknown ids give a 404 problem detail`() {
+        every { service.delete(id) } returns Unit
+
+        mockMvc.delete("/api/v1/agents/$id") { with(user) }.andExpect {
+            status { isNoContent() }
+            content { string("") }
+        }
+        verify(exactly = 1) { service.delete(id) }
+
+        val missing = UUID.fromString("2b3c4d5e-6f70-4812-9345-67890abcdef1")
+        every { service.delete(missing) } throws NotFoundException("Agent run $missing not found")
+        mockMvc.delete("/api/v1/agents/$missing") { with(user) }.andExpect {
+            status { isNotFound() }
+            content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+            jsonPath("$.detail") { value("Agent run $missing not found") }
+        }
     }
 
     @Test

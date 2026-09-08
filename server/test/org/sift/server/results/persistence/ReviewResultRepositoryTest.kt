@@ -175,6 +175,24 @@ class ReviewResultRepositoryTest : PostgresIntegrationTest() {
         assertTrue(results.findings(UUID.randomUUID(), severity = null, file = null).isEmpty())
     }
 
+    @Test
+    fun `deleting a run's results removes their findings and frees the run for deletion`() {
+        val run = run()
+        val other = result(executionId = "exec-keep", agentRunId = null, completedAt = now)
+        val owned = result(executionId = "exec-owned", agentRunId = run.id, completedAt = now)
+        results.insert(other, listOf(finding("keep.kt", Severity.INFO)))
+        results.insert(owned, listOf(finding("a.kt", Severity.MAJOR), finding("b.kt", Severity.INFO)))
+
+        assertEquals(1, results.deleteByAgentRunId(run.id))
+
+        assertNull(results.findById(owned.id))
+        assertTrue(results.findings(owned.id, severity = null, file = null).isEmpty())
+        assertNotNull(results.findById(other.id))
+        assertEquals(1, results.findings(other.id, severity = null, file = null).size)
+        assertTrue(runs.delete(run.id))
+        assertEquals(0, results.deleteByAgentRunId(UUID.randomUUID()))
+    }
+
     private fun result(
         executionId: String,
         agentRunId: UUID?,

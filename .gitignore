@@ -5,3 +5,5 @@ build
 **/__pycache__/
 tools/*.env
 !tools/*.env.example
+# Local development defaults only (no secrets); see the file header.
+!tools/dev.env

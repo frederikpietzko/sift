@@ -10,6 +10,19 @@ For an automated, self-bootstrapping proof of the whole platform use the
 cluster (`build/e2e/kubeconfig`), starts Compose, operator and server itself, and never touches
 the `.kubeconfig`/`kind-kind` setup described here ([ADR 0015](../adrs/0015-e2e-harness-dedicated-kind-cluster.md)).
 
+## One-command local stack
+
+Once the cluster below is prepared, `tools/dev.sh` starts everything a full local setup needs:
+the Compose services (Postgres, RabbitMQ, Keycloak with the imported `sift` realm, SearXNG), the
+host-run operator (through `k8s/local/dev.py run`, so its context/identity checks still apply),
+the server and the Vite dev server for the web UI. Connection defaults are the committed,
+development-only values in `tools/dev.env`; per-component logs go to `build/dev/*.log`.
+
+It never creates a cluster, installs the CRD or applies manifests: when a prerequisite is missing
+it prints the exact administrator command from this document and stops. Use `--no-operator` to run
+without a cluster, `--only server|web|operator|compose` for a single component, and `--stop` to
+shut the Compose services down.
+
 ## Prerequisites and setup
 
 Run from the repository root with Python 3.10+, `kubectl`, `kind`, Docker Desktop, and

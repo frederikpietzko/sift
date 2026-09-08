@@ -3,7 +3,8 @@
 `server` is the Spring Boot 4 application (`org.sift.server`) that fronts the platform: it persists
 repositories, agent runs and review results in Postgres, applies `CodeReview` custom resources to the
 cluster via the fabric8 client, and consumes lifecycle events from RabbitMQ. It is the only component
-the UI talks to.
+the [web UI](web-ui.md) talks to, and its controllers are the source of the shared OpenAPI contract
+(`api/openapi.yaml`, [ADR 0018](../adrs/0018-shared-openapi-contract-and-web-ui.md)).
 
 Status: Step 7 (complete for this iteration) — Postgres, Exposed and Flyway are wired (Step 2), the
 repositories API with encrypted tokens and k8s Secret mirroring is implemented (Step 3,
@@ -17,14 +18,17 @@ from the configured OIDC provider, callers are provisioned into `users` and runs
 ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md), superseding
 [ADR 0014](../adrs/0014-defer-server-api-authentication.md)); see [Security](#security). The code is split into
 Spring Modulith application modules with verified boundaries ([ADR 0017](../adrs/0017-server-package-structure-with-spring-modulith.md),
-see [Module layout](#module-layout)).
+see [Module layout](#module-layout)). The public API is described by a generated, committed OpenAPI 3.1 document
+guarded against drift by a test ([OpenAPI contract](#openapi-contract),
+[ADR 0018](../adrs/0018-shared-openapi-contract-and-web-ui.md)).
 
 ## API summary
 
 All endpoints are JSON (`application/json`) unless noted; errors are RFC 7807 `application/problem+json`
 produced by `ApiExceptionHandler` (domain errors) or the security handlers (`401`/`403`). Every `/api/**`
 endpoint except `GET /api/v1/auth/config` requires `Authorization: Bearer <JWT>` and answers `401` otherwise
-(see [Security](#security)); the `Errors` column below lists the endpoint-specific codes only.
+(see [Security](#security)); the `Errors` column below lists the endpoint-specific codes only. The same
+information, machine-readable, is the [OpenAPI contract](#openapi-contract).
 
 | Method | Path | Success | Errors | Section |
 |---|---|---|---|---|
@@ -39,10 +43,12 @@ endpoint except `GET /api/v1/auth/config` requires `Authorization: Bearer <JWT>`
 | `GET` | `/api/v1/agents` | `200` | `400` | [Agent runs](#agent-runs-api) |
 | `GET` | `/api/v1/agents/{id}` | `200` | `404` | [Agent runs](#agent-runs-api) |
 | `POST` | `/api/v1/agents/{id}/cancel` | `202` | `404`, `409` | [Agent runs](#agent-runs-api) |
+| `DELETE` | `/api/v1/agents/{id}` | `204` | `404` | [Agent runs](#agent-runs-api) |
 | `GET` | `/api/v1/agents/watch` | `200` `text/event-stream` | `400`, `406` | [Watch](#agent-run-watch-sse) |
 | `GET` | `/api/v1/results` | `200` | `400` | [Results](#review-results-api) |
 | `GET` | `/api/v1/results/{id}` | `200` | `400`, `404` | [Results](#review-results-api) |
 | `GET` | `/api/v1/results/{id}/findings` | `200` | `400`, `404` | [Results](#review-results-api) |
+| `GET` | `/v3/api-docs`, `/v3/api-docs.yaml` (anonymous) | `200` | — | [OpenAPI contract](#openapi-contract) |
 | `GET` | `/actuator/health`, `/actuator/health/{liveness,readiness}`, `/actuator/info` (anonymous) | `200`/`503` | — | Actuator |
 
 Ingress: REST from clients; AMQP consumers on `sift.server.code-review.status` and
@@ -63,25 +69,25 @@ no access to another module's internals, only declared dependencies) and renders
 
 | Module | Depends on | Purpose |
 |---|---|---|
-| `api` | — | RFC 7807 error handling, shared `Page`/`PageResponse`. |
+| `api` | — | RFC 7807 error handling, shared `Page`/`PageResponse`, OpenAPI description (`OpenApiConfiguration`). |
 | `config` | — | `ServerProperties`, coroutine scope, `KubernetesClient`, queue topology. |
 | `users` | `api`, `config` | Authenticated identities, `@CurrentUser`, provisioning filter; exposes `persistence` as a named interface (`users :: persistence`) so `agents` can join the `users` table. |
 | `security` | `config`, `users` | OAuth2 resource server filter chain, problem-detail handlers, `/api/v1/auth/config`. |
 | `repositories` | `api`, `config` | Repositories and their credentials; `RepositoryUsageCheck` SPI lets other modules veto deletion. |
 | `agents` | `api`, `config`, `repositories`, `users`, `users :: persistence` | Agent runs: REST, `CodeReview` CR adapter, status consumer, SSE watch, `RepositoryUsageCheck` implementation. |
-| `results` | `api`, `config`, `agents` | Review results ingested from `code-review.completed`; links to and completes runs via `AgentRunService`. |
+| `results` | `api`, `config`, `agents` | Review results ingested from `code-review.completed`; links to and completes runs via `AgentRunService`; `AgentRunCleanup` implementation deleting a removed run's results. |
 
 | Path | Purpose |
 |---|---|
-| `server/module.yaml` | `jvm/app`, applies the shared detekt and Spring templates, `runtimeClasspathMode: jars`; `spring-modulith-api` (annotations) in `dependencies`, `spring-modulith-starter-test` in `test-dependencies`. |
+| `server/module.yaml` | `jvm/app`, applies the shared detekt and Spring templates, `runtimeClasspathMode: jars`; `spring-modulith-api` (annotations) and `springdoc-openapi-starter-webmvc-api` in `dependencies`, `spring-modulith-starter-test` in `test-dependencies`. |
 | `src/org/sift/server/Main.kt`, `Application.kt` | Entry point. Imports `ExposedAutoConfiguration`, excludes `DataSourceTransactionManagerAutoConfiguration` so Exposed's `SpringTransactionManager` is the only transaction manager. |
 | `src/org/sift/server/*/ModuleMetadata.kt` | One per module: `@ApplicationModule(allowedDependencies = …) @PackageInfo`; `users/persistence/ModuleMetadata.kt` carries `@NamedInterface("persistence")`. |
-| `src/org/sift/server/api/` | `ApiExceptionHandler` (`@RestControllerAdvice`, RFC 7807 `ProblemDetail`), `NotFoundException` (404), `ConflictException` (409), `Paging.kt` (`Page<T>`, `PageResponse<T>`). |
+| `src/org/sift/server/api/` | `ApiExceptionHandler` (`@RestControllerAdvice`, RFC 7807 `ProblemDetail`), `NotFoundException` (404), `ConflictException` (409), `Paging.kt` (`Page<T>`, `PageResponse<T>`), `OpenApiConfiguration` (`OpenAPI` bean with the `bearerAuth` scheme, stable `operationId` customizer, shared `ProblemDetail` schema and error responses). |
 | `src/org/sift/server/config/ServerProperties.kt` | `@ConfigurationProperties("sift.server")`, validated; nested `Watch { enabled, heartbeat }` and `Auth { clientId, scopes, claims { username, email } }`. |
 | `src/org/sift/server/config/ApplicationCoroutineScope.kt` | The application `CoroutineScope` bean (`SupervisorJob + Dispatchers.IO + CoroutineName`), cancelled on context close. |
 | `src/org/sift/server/config/KubernetesConfiguration.kt` | Default `KubernetesClient` bean (`KubernetesClientBuilder().build()`, backs off if one is already defined). |
 | `src/org/sift/server/config/MessagingConfiguration.kt` | `ServerQueues` constants (queue names and the `CONSUMERS_ENABLED` property key) and the `Declarables` bean with the server's consumer queues, DLX and bindings. |
-| `src/org/sift/server/security/SecurityConfiguration.kt` | The `SecurityFilterChain`: stateless, CSRF off, `oauth2ResourceServer.jwt`, permit list `ANONYMOUS_GET_PATHS` (`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/api/v1/auth/config`), everything else `authenticated`; registers `users.UserProvisioningFilter` after `BearerTokenAuthenticationFilter`. |
+| `src/org/sift/server/security/SecurityConfiguration.kt` | The `SecurityFilterChain`: stateless, CSRF off, `oauth2ResourceServer.jwt`, permit list `ANONYMOUS_GET_PATHS` (`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/api/v1/auth/config`, `/v3/api-docs`, `/v3/api-docs/**`, `/v3/api-docs.yaml`), everything else `authenticated`; registers `users.UserProvisioningFilter` after `BearerTokenAuthenticationFilter`. |
 | `src/org/sift/server/security/ProblemDetailAuthHandlers.kt` | `ProblemDetailAuthenticationEntryPoint` (delegates to `BearerTokenAuthenticationEntryPoint` for `WWW-Authenticate`, then writes a `401` problem) and `ProblemDetailAccessDeniedHandler` (`403` problem). |
 | `src/org/sift/server/security/AuthConfigController.kt` | Anonymous `GET /api/v1/auth/config` → `AuthConfigResponse { issuerUri, clientId, scopes }`. |
 | `src/org/sift/server/users/User.kt`, `UserService.kt` | Domain model and `@Transactional provision(jwt)` mapping the configured claims (username falls back to `sub`), `get(id)`. |
@@ -111,12 +117,12 @@ no access to another module's internals, only declared dependencies) and renders
 | `src/org/sift/server/results/persistence/ReviewResultsTable.kt`, `ReviewFindingsTable.kt`, `ReviewResultRepository.kt` | Exposed DSL tables for `review_results` and `review_findings` and the blocking repository (`insert` via `insertIgnore`, `findById`, `findByExecutionId`, `list`, `findings`, `countFindings`). |
 | `src/org/sift/server/results/messaging/ReviewResultConsumer.kt` | `@RabbitListener` on `sift.server.code-review.completed` feeding `ReviewResultService.store`. |
 | `src/org/sift/server/results/web/ReviewResultController.kt`, `ReviewResultDtos.kt` | `/api/v1/results` REST endpoints and response DTOs. |
-| `resources/application.yaml` | Default configuration, all secrets/hosts from environment variables. |
+| `resources/application.yaml` | Default configuration, all secrets/hosts from environment variables; `springdoc.*` (path `/v3/api-docs`, `paths-to-match: /api/**`, ordered keys, `application/json` default, Swagger UI disabled). |
 | `resources/db/migration/` | Flyway migrations (`V1__init.sql`, `V2__users.sql`). |
 | `test/org/sift/server/` | Tests mirror the module packages (`agents/web/AgentRunControllerTest`, `agents/persistence/AgentRunRepositoryTest`, `agents/watch/*`, `results/messaging/ReviewResultConsumerIntegrationTest`, …). `ModularityTest` (Spring Modulith `verify()`, expected module set, documentation rendering; test classes are excluded from the analysis because fixtures are shared across modules). Fixtures: `security/TestSecurityConfiguration` (`@Primary JwtDecoder` decoding base64url JSON claim sets built by `TestTokens.bearer(...)`, plus the MockMvc post-processor `TestTokens.authenticated(...)` — no IdP is contacted, the real filter chain runs), `users/TestUsers`, `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled, test decoder imported), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `agents/watch/WatchIntegrationTest` (listener enabled on a `RANDOM_PORT` server). Coverage: `security/SecurityConfigurationTest` (401 problem + `WWW-Authenticate` without/with rejected token, anonymous probes and `/api/v1/auth/config`), `security/AuthConfigControllerTest`, `users/**` (upsert semantics against Postgres, claim mapping and `sub` fallback, `MeControllerTest`), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create with bearer → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`; plus a `401` without token), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/**` (cipher, Secret sync via fabric8 mock server, service with mockk incl. the `RepositoryUsageCheck` veto, `@WebMvcTest` controller, repository against Postgres), `agents/**` (service with mockk incl. `completeWithResult`, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller incl. `mine`/`createdBy`, repository against Postgres incl. `created_by` and `hasActiveRuns`, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ, `AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`), `results/**` (repository against Postgres incl. duplicate `execution_id`, service with a mocked `AgentRunService`, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery). `@WebMvcTest` slices import `SecurityConfiguration` + `TestSecurityConfiguration` and mock `UserService`. |
 
 Stack: Spring Boot 4.1.1 (Web MVC, Validation, Actuator, AMQP, Flyway, OAuth2 Resource Server / Spring Security 7;
-`spring-security-test` in tests), Exposed 1.5.0
+`spring-security-test` in tests), springdoc-openapi 3.1.0 (`starter-webmvc-api`, no Swagger UI), Exposed 1.5.0
 (`exposed-spring-boot4-starter`, `exposed-jdbc`, `exposed-json`, `exposed-java-time`), PostgreSQL
 driver, `kotlinx-coroutines-reactor` (Kotlin `Flow` → SSE in Spring MVC), fabric8 `kubernetes-client`, `//k8s/crds`,
 `//messaging`, Spring Modulith 2.0.5 (`spring-modulith-api` at compile time, `spring-modulith-starter-test` in tests).
@@ -175,9 +181,14 @@ docker compose up -d --wait postgres rabbitmq keycloak
 SIFT_SERVER_ENCRYPTION_KEY=$(openssl rand -base64 32) ./kotlin run --module server
 ```
 
+`tools/dev.sh` does the same with the committed development defaults from `tools/dev.env` (fixed encryption key, so
+repository tokens survive restarts) and additionally starts the operator and the web UI; `tools/dev.sh --only server`
+starts just this module.
+
 Health: `GET http://localhost:8080/actuator/health` (liveness/readiness probes under
-`/actuator/health/liveness` and `/actuator/health/readiness`; `info` is exposed as well). These and
-`GET /api/v1/auth/config` need no token; everything else does. The defaults accept tokens from the Compose
+`/actuator/health/liveness` and `/actuator/health/readiness`; `info` is exposed as well). These,
+`GET /api/v1/auth/config` and the OpenAPI description `GET /v3/api-docs[.yaml]` need no token; everything else
+does. The defaults accept tokens from the Compose
 Keycloak realm `sift` (`http://localhost:8180/realms/sift`, admin console `http://localhost:8180`, `admin`/`admin`),
 which ships the dev user `dev`/`dev`. Obtain a token for manual calls with the password grant:
 
@@ -209,7 +220,7 @@ manifests (`app.kubernetes.io/managed-by: sift-local-dev`):
 | `rbac.yaml` | ServiceAccount `sift-server`, Role (`get`/`list`/`create`/`delete` on `sift.org codereviews`; `get`/`create`/`patch`/`update`/`delete` on `secrets`) and RoleBinding. |
 | `configmap.yaml` | ConfigMap `sift-server` with the non-secret environment: `SIFT_SERVER_NAMESPACE=sift-dev`, `SPRING_DATASOURCE_URL` (`jdbc:postgresql://postgres:5432/sift`), `SPRING_DATASOURCE_USERNAME`, `SPRING_RABBITMQ_HOST/PORT/USERNAME/VIRTUAL_HOST` (`rabbitmq:5672`), `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` (`http://host.docker.internal:8180/realms/sift`, the Compose Keycloak as seen from a kind cluster), `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES=sift-server`, `SIFT_SERVER_AUTH_CLIENT_ID=sift-web`, `SIFT_SERVER_AUTH_SCOPES`. Adjust the hosts to the Postgres/RabbitMQ Services and the issuer/client id to the organisation's identity provider. Note that the token's `iss` must equal the configured issuer, so browser clients and the server must use the same issuer URL. |
 | `deployment.yaml` | Deployment `sift-server`, 1 replica (one `LISTEN` connection per replica; multi-replica fan-out is untested), `serviceAccountName: sift-server` with token automount, `envFrom` the ConfigMap, passwords/key from Secret `sift-server-secrets`, container port `8080`, startup/liveness probe `/actuator/health/liveness`, readiness `/actuator/health/readiness`, requests `250m`/`512Mi`, limits `1`/`1Gi`, nonroot (`10001`), `RuntimeDefault` seccomp, read-only root filesystem with an `emptyDir` on `/tmp`, all capabilities dropped. The image `jbfpietzko/sift-server:latest` is a placeholder until a server image is published. |
-| `service.yaml` | ClusterIP Service `sift-server`, port `8080` → `http`. No Ingress is shipped; TLS termination in front of the server remains the operator's responsibility ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md)). |
+| `service.yaml` | ClusterIP Service `sift-server`, port `8080` → `http`. No Ingress is shipped; TLS termination in front of the server remains the operator's responsibility ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md)). Browsers do not reach this Service directly: the [`sift-web`](web-ui.md#deployment) nginx proxies `/api/` to it on the UI's origin, so the server needs no CORS configuration. |
 
 The Secret is created by the administrator and is not part of the repository:
 
@@ -250,7 +261,9 @@ Not part of this iteration; each is a documented follow-up:
 - **CR reconciliation** — a missed `code-review.status` event is not repaired by re-reading CRs
   ([ADR 0011](../adrs/0011-operator-status-events-via-rabbitmq.md) consequence).
 - **Server container image and publication**; the Deployment references a placeholder tag.
-- **Multi-replica SSE watch** validation and any UI.
+- **Multi-replica SSE watch** validation.
+- **CORS** — deliberately absent: the [web UI](web-ui.md) is served same-origin through its nginx proxy; a client on
+  another origin (e.g. a dev server without proxy) needs one in front of the server.
 
 ## Security
 
@@ -261,7 +274,7 @@ holds no client secret.
 
 | Aspect | Behaviour |
 |---|---|
-| Protected surface | Everything, including `/api/**`, except `GET /actuator/health`, `/actuator/health/**`, `/actuator/info` and `GET /api/v1/auth/config` (`SecurityConfiguration.ANONYMOUS_GET_PATHS`). |
+| Protected surface | Everything, including `/api/**`, except `GET /actuator/health`, `/actuator/health/**`, `/actuator/info`, `GET /api/v1/auth/config` and the OpenAPI description `GET /v3/api-docs`, `/v3/api-docs/**`, `/v3/api-docs.yaml` (`SecurityConfiguration.ANONYMOUS_GET_PATHS`). The description reveals the API surface, not data. |
 | Token validation | `spring-boot-starter-oauth2-resource-server`: signature via the JWKS discovered from `issuer-uri`, `iss` equality, `exp`/`nbf`, and — when `audiences` is non-empty — that `aud` contains one of the configured values. No custom validators. |
 | Missing/invalid token | `401` with `WWW-Authenticate: Bearer` (plus RFC 6750 `error`/`error_description` for malformed or rejected tokens) and an `application/problem+json` body `{type, title: "Unauthorized", status: 401, detail, instance}` written by `ProblemDetailAuthenticationEntryPoint`. Expired, forged, wrong-issuer and wrong-audience tokens are all `401`. |
 | Access denied | `403` problem from `ProblemDetailAccessDeniedHandler` (not reachable today because authorization is flat). |
@@ -288,6 +301,26 @@ including the SSE watch (a native `EventSource` cannot set headers; use a fetch-
 Returns the caller as provisioned from the current token:
 `UserResponse { id, subject, issuer, username, email }`. `id` is the server-side UUID used in
 `AgentRunResponse.createdBy.id` and the `createdBy` query parameter.
+
+### OpenAPI contract
+
+`GET /v3/api-docs` (JSON) and `GET /v3/api-docs.yaml` are rendered by springdoc from the controllers and served
+anonymously; `springdoc.paths-to-match=/api/**` keeps actuator and framework endpoints out. The YAML rendering is
+committed as [`api/openapi.yaml`](../../api/openapi.yaml) — the shared contract of the [web UI](web-ui.md) and the
+future IDE plugins ([ADR 0018](../adrs/0018-shared-openapi-contract-and-web-ui.md)):
+
+- `OpenApiConfiguration` (module `api`) adds the info block, the `bearerAuth` HTTP bearer/JWT security scheme as
+  a global requirement (the auth discovery endpoint opts out with `@SecurityRequirements`), stable `operationId`s
+  derived from the handler (`<resource><Method>`, e.g. `agentRunList`, `repositoryCreate`), the shared
+  `ProblemDetail` schema and uniform `application/problem+json` error responses.
+- Controllers carry `@Tag`, `@Operation(summary)` and `@ApiResponse` for non-default codes (`201`, `202`, `204`,
+  `409`); `AgentWatchController` documents the `text/event-stream` response whose `data` frames are
+  `AgentRunEvent`s; `AgentRunResponse.spec` is a free-form object.
+- `OpenApiContractTest` (`PostgresIntegrationTest` + MockMvc) fetches the live YAML, drops the request-dependent
+  `servers:` block and compares it byte for byte with `api/openapi.yaml`; a mismatch fails `./kotlin check` with a
+  unified diff. Regenerate with
+  `SIFT_UPDATE_OPENAPI=true ./kotlin test -m server --include-classes org.sift.server.api.OpenApiContractTest`,
+  then `pnpm generate` in `web/` for the TypeScript types (see [`api/README.md`](../../api/README.md)).
 
 ### Identity providers
 
@@ -352,6 +385,7 @@ the server-side record of one agent execution; for `CODE_REVIEW` it is backed by
 | `GET` | `/` | query `kind?`, `phase?`, `repositoryId?`, `mine = false`, `createdBy?` (user UUID), `page = 0`, `size = 20` (clamped to 1..200) | `200`, `PageResponse<AgentRunResponse> { items, page, size, total }`, newest first |
 | `GET` | `/{id}` | — | `200`, `AgentRunResponse` |
 | `POST` | `/{id}/cancel` | — | `202 Accepted`, `AgentRunResponse` (phase `CANCELLED`) |
+| `DELETE` | `/{id}` | — | `204 No Content` |
 | `GET` | `/watch` | query `agentId?`, `kind?`, `mine = false`, `createdBy?`; header `Last-Event-ID?` | `200`, `text/event-stream` — see [Agent run watch](#agent-run-watch-sse) |
 
 `{id}` is restricted to the UUID pattern `[0-9a-fA-F-]{36}`, so `/watch` never falls into the run-by-id route
@@ -384,7 +418,7 @@ Validation: `branch`/`baseBranch` not blank, `commitSha` must match `^[0-9a-fA-F
 | `409` | Cancel of a run that is already terminal. |
 | `500` | Applying the CR failed; the run stays visible with phase `FAILED`, reason `ApplyFailed` and the client exception message. |
 
-### Create and cancel flow
+### Create, cancel and delete flow
 
 1. `AgentRunService.create(request, user)` validates the repository (`RepositoryService.get`), inserts the run as
    `CREATED`/`API` with `crName = cr-<run id>`, `created_by = user.id` and the spec JSON, and commits
@@ -401,6 +435,13 @@ Validation: `branch`/`baseBranch` not blank, `commitSha` must match `^[0-9a-fA-F
 
 Adapters implement `AgentKindAdapter { kind, resourceName(runId), apply(run, request), delete(run) }`; the
 service picks the adapter by `request.kind`.
+
+`delete` (`@Transactional`) removes a run entirely: a non-terminal run's CR is deleted first (same call as
+`cancel`, so nothing keeps executing), then every `AgentRunCleanup` runs and finally the `agent_runs` row is
+deleted. `AgentRunCleanup` is the `agents` SPI for the inverse of `RepositoryUsageCheck`: the `results` module
+implements it (`ReviewResultRunCleanup`) and deletes the run's `review_results` rows, whose `review_findings`
+cascade in the schema — without it the `review_results.agent_run_id` foreign key would reject the deletion.
+Deleting is open to every authenticated user (flat authorisation) and is irreversible; unknown ids are `404`.
 
 ### Status upsert rules
 

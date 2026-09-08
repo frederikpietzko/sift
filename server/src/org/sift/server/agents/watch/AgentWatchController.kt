@@ -1,5 +1,10 @@
 package org.sift.server.agents.watch
 
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.media.Content
+import io.swagger.v3.oas.annotations.media.Schema
+import io.swagger.v3.oas.annotations.responses.ApiResponse
+import io.swagger.v3.oas.annotations.tags.Tag
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -29,6 +34,7 @@ import kotlin.time.toKotlinDuration
  * to an `SseEmitter` (`kotlinx-coroutines-reactor`); `spring.mvc.async.request-timeout=-1` keeps it open.
  * `mine=true` / `createdBy` narrow both the snapshot and the live events to one creator, like the list endpoint.
  */
+@Tag(name = "agents")
 @RestController
 @RequestMapping("/api/v1/agents/watch")
 class AgentWatchController(
@@ -37,6 +43,23 @@ class AgentWatchController(
 ) {
     private val heartbeat = properties.watch.heartbeat.toKotlinDuration()
 
+    @Operation(
+        summary = "Watch agent runs (Server-Sent Events)",
+        description = "Open-ended `text/event-stream`. Each event is named after `AgentRunEvent.type` (`SNAPSHOT` " +
+            "or `UPDATED`), carries an `AgentRunEvent` JSON payload as `data` and the run's `updatedAt` epoch millis " +
+            "as `id`; send it back as `Last-Event-ID` to resume. `:heartbeat` comment frames keep the stream alive.",
+    )
+    @ApiResponse(
+        responseCode = "200",
+        description = "Event stream; each `data` frame is one `AgentRunEvent`",
+        content = [
+            Content(
+                mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
+                schema = Schema(implementation = AgentRunEvent::class),
+            ),
+        ],
+    )
+    @ApiResponse(responseCode = "400", description = "`mine` and `createdBy` name different users")
     @GetMapping(produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     @Suppress("LongParameterList") // one parameter per query string filter
     fun watch(

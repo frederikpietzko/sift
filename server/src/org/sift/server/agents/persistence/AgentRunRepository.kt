@@ -9,6 +9,7 @@ import org.jetbrains.exposed.v1.core.greater
 import org.jetbrains.exposed.v1.core.notInList
 import org.jetbrains.exposed.v1.jdbc.Query
 import org.jetbrains.exposed.v1.jdbc.andWhere
+import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -32,6 +33,7 @@ import kotlin.uuid.toKotlinUuid
  * the Flyway schema only, hence the explicit join condition.
  */
 @org.springframework.stereotype.Repository
+@Suppress("TooManyFunctions") // one query per access pattern of `agent_runs`
 class AgentRunRepository {
     private val runsWithCreator = AgentRunsTable.join(
         otherTable = UsersTable,
@@ -100,6 +102,10 @@ class AgentRunRepository {
         check(updated == 1) { "Agent run ${run.id} does not exist" }
         return run
     }
+
+    /** Removes the run; returns whether a row was deleted. Rows referencing it must be gone already. */
+    fun delete(id: UUID): Boolean =
+        AgentRunsTable.deleteWhere { AgentRunsTable.id eq id.toKotlinUuid() } == 1
 
     fun findById(id: UUID): AgentRun? =
         runsWithCreator.selectAll().where { AgentRunsTable.id eq id.toKotlinUuid() }.singleOrNull()?.toAgentRun()

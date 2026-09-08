@@ -19,12 +19,14 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertNotEquals
 
 /**
  * The filter chain itself: which routes are open, how failures are rendered and that the decoder is consulted for
@@ -104,6 +106,15 @@ class SecurityConfigurationTest {
             jsonPath("$.clientId") { value("sift-web") }
         }
         mockMvc.post("/api/v1/auth/config").andExpect { status { isUnauthorized() } }
+        verify(exactly = 0) { users.provision(any()) }
+    }
+
+    @Test
+    fun `openapi description is anonymous`() {
+        listOf("/v3/api-docs", "/v3/api-docs.yaml", "/v3/api-docs/swagger-config").forEach { path ->
+            mockMvc.get(path).andExpect { status { isNotFound() } } // permitted; no springdoc bean in this slice
+        }
+        mockMvc.post("/v3/api-docs").andExpect { status { isUnauthorized() } }
         verify(exactly = 0) { users.provision(any()) }
     }
 

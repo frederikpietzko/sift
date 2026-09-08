@@ -24,7 +24,7 @@
         "http://127.0.0.1:*"
       ],
       "webOrigins": [
-        "+"
+        "*"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",

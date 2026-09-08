@@ -1,0 +1,38 @@
+# Example only — intentionally commented out. No Ingress is shipped: the kind development cluster has no
+# ingress controller (reach the UI with `kubectl -n sift-dev port-forward svc/sift-web 8081:80`), and TLS
+# termination in front of the platform remains the operator's responsibility (ADR 0016).
+#
+# The whole origin is routed to `sift-web`; nginx inside the Pod forwards `/api/` and `/v3/api-docs` to
+# `sift-server`, so a single host rule is enough and the browser never sees a second origin. When
+# terminating TLS at the Ingress remember two things for the SSE stream `GET /api/v1/agents/watch`:
+# disable response buffering and raise the read timeout above the server's 15s heartbeat interval
+# (the ingress-nginx annotations below do that). The OIDC client (`sift-web` in the identity provider)
+# must list `https://<host>/callback` as a redirect URI.
+#
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: sift-web
+#   namespace: sift-dev
+#   labels:
+#     app.kubernetes.io/name: sift-web
+#     app.kubernetes.io/managed-by: sift-local-dev
+#   annotations:
+#     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+#     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+#     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts: [sift.example.com]
+#       secretName: sift-web-tls
+#   rules:
+#     - host: sift.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: sift-web
+#                 port: {name: http}

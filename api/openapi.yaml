@@ -1,0 +1,998 @@
+openapi: 3.1.0
+info:
+  description: REST and Server-Sent Events API of the Sift server. Errors are RFC
+    9457 problem details (`application/problem+json`).
+  title: Sift Server API
+  version: v1
+security:
+- bearerAuth: []
+tags:
+- description: "Agent runs: trigger, list, inspect, cancel and delete"
+  name: agents
+- description: Git repositories reviews are started for; tokens never leave the server
+  name: repositories
+- description: Review results and their findings
+  name: results
+- description: Anonymous OIDC discovery for public clients
+  name: auth
+- description: The authenticated user
+  name: users
+paths:
+  /api/v1/agents:
+    get:
+      operationId: agentRunList
+      parameters:
+      - in: query
+        name: kind
+        required: false
+        schema:
+          type: string
+          enum:
+          - CODE_REVIEW
+      - in: query
+        name: phase
+        required: false
+        schema:
+          type: string
+          enum:
+          - CREATED
+          - PENDING
+          - RUNNING
+          - SUCCESS
+          - FAILED
+          - CANCELLED
+      - in: query
+        name: repositoryId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: mine
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: createdBy
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: page
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+      - in: query
+        name: size
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageResponseAgentRunResponse"
+          description: "One page of runs, newest first"
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: '`mine` and `createdBy` name different users'
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+      summary: List agent runs
+      tags:
+      - agents
+    post:
+      operationId: agentRunCreate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentRunRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRunResponse"
+          description: Run accepted; `Location` points at the new run
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Validation failed
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Repository not found
+      summary: Start an agent run
+      tags:
+      - agents
+  /api/v1/agents/watch:
+    get:
+      description: "Open-ended `text/event-stream`. Each event is named after `AgentRunEvent.type`\
+        \ (`SNAPSHOT` or `UPDATED`), carries an `AgentRunEvent` JSON payload as `data`\
+        \ and the run's `updatedAt` epoch millis as `id`; send it back as `Last-Event-ID`\
+        \ to resume. `:heartbeat` comment frames keep the stream alive."
+      operationId: agentWatchWatch
+      parameters:
+      - in: query
+        name: agentId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: kind
+        required: false
+        schema:
+          type: string
+          enum:
+          - CODE_REVIEW
+      - in: query
+        name: mine
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: createdBy
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: Last-Event-ID
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/AgentRunEvent"
+          description: Event stream; each `data` frame is one `AgentRunEvent`
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: '`mine` and `createdBy` name different users'
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+      summary: Watch agent runs (Server-Sent Events)
+      tags:
+      - agents
+  /api/v1/agents/{id}:
+    delete:
+      description: A run that is still active is cancelled first; its review result
+        and findings are deleted too.
+      operationId: agentRunDelete
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: Run deleted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Run not found
+      summary: Delete an agent run
+      tags:
+      - agents
+    get:
+      operationId: agentRunGet
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRunResponse"
+          description: The run
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Run not found
+      summary: Get an agent run
+      tags:
+      - agents
+  /api/v1/agents/{id}/cancel:
+    post:
+      operationId: agentRunCancel
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRunResponse"
+          description: Cancellation requested
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Run not found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Run already reached a terminal phase
+      summary: Cancel an agent run
+      tags:
+      - agents
+  /api/v1/auth/config:
+    get:
+      description: "Issuer, public client id and scopes a PKCE client needs to log\
+        \ in. Does not require a token."
+      operationId: authConfigConfig
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthConfigResponse"
+          description: OK
+      security: []
+      summary: Get the OIDC configuration for public clients
+      tags:
+      - auth
+  /api/v1/me:
+    get:
+      operationId: meMe
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+      summary: Get the calling user's profile
+      tags:
+      - users
+  /api/v1/repositories:
+    get:
+      operationId: repositoryList
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RepositoryResponse"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+      summary: List repositories
+      tags:
+      - repositories
+    post:
+      operationId: repositoryCreate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepositoryRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+          description: Repository created; `Location` points at it
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Validation failed
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: A repository with the same name exists
+      summary: Register a repository
+      tags:
+      - repositories
+  /api/v1/repositories/{id}:
+    delete:
+      operationId: repositoryDelete
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: Repository deleted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Repository not found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Repository still has active agent runs
+      summary: Delete a repository
+      tags:
+      - repositories
+    get:
+      operationId: repositoryGet
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+          description: The repository
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Repository not found
+      summary: Get a repository
+      tags:
+      - repositories
+    put:
+      description: Replaces the URL and/or rotates or clears the token.
+      operationId: repositoryUpdate
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRepositoryRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+          description: The updated repository
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Validation failed
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Repository not found
+      summary: Update a repository
+      tags:
+      - repositories
+  /api/v1/results:
+    get:
+      operationId: reviewResultList
+      parameters:
+      - in: query
+        name: repositoryUrl
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: commitSha
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: agentRunId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: page
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+      - in: query
+        name: size
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageResponseReviewResultSummaryResponse"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+      summary: List review results
+      tags:
+      - results
+  /api/v1/results/{id}:
+    get:
+      operationId: reviewResultGet
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResultResponse"
+          description: The result including its findings
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Result not found
+      summary: Get a review result with all its findings
+      tags:
+      - results
+  /api/v1/results/{id}/findings:
+    get:
+      description: Optionally narrowed by severity and file
+      operationId: reviewResultFindings
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: severity
+        required: false
+        schema:
+          type: string
+          enum:
+          - BLOCKER
+          - MAJOR
+          - MINOR
+          - INFO
+      - in: query
+        name: file
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReviewFindingResponse"
+          description: Matching findings
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Missing or invalid bearer token
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+          description: Result not found
+      summary: List the findings of a review result
+      tags:
+      - results
+components:
+  schemas:
+    AgentRunEvent:
+      type: object
+      properties:
+        run:
+          $ref: "#/components/schemas/AgentRunResponse"
+        type:
+          type: string
+          enum:
+          - SNAPSHOT
+          - UPDATED
+    AgentRunResponse:
+      type: object
+      properties:
+        completedAt:
+          type:
+          - string
+          - "null"
+          format: date-time
+        crName:
+          type: string
+        crUid:
+          type:
+          - string
+          - "null"
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          oneOf:
+          - $ref: "#/components/schemas/RunCreatorResponse"
+          - type: "null"
+        executionId:
+          type:
+          - string
+          - "null"
+        generation:
+          type:
+          - integer
+          - "null"
+          format: int64
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - CODE_REVIEW
+        message:
+          type:
+          - string
+          - "null"
+        phase:
+          type: string
+          enum:
+          - CREATED
+          - PENDING
+          - RUNNING
+          - SUCCESS
+          - FAILED
+          - CANCELLED
+        reason:
+          type:
+          - string
+          - "null"
+        repositoryId:
+          type:
+          - string
+          - "null"
+          format: uuid
+        source:
+          type: string
+          enum:
+          - API
+          - EXTERNAL
+        spec:
+          type: object
+          additionalProperties: {}
+          description: "Kind-specific run parameters, e.g. `CodeReviewRunSpec` for\
+            \ `CODE_REVIEW`"
+        startedAt:
+          type:
+          - string
+          - "null"
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AuthConfigResponse:
+      type: object
+      properties:
+        clientId:
+          type: string
+        issuerUri:
+          type:
+          - string
+          - "null"
+        scopes:
+          type: array
+          items:
+            type: string
+    CreateAgentRunRequest:
+      type: object
+      properties:
+        baseBranch:
+          type: string
+          minLength: 1
+        branch:
+          type: string
+          minLength: 1
+        commitSha:
+          type: string
+          pattern: "^[0-9a-fA-F]{40}$"
+        kind:
+          type: string
+          enum:
+          - CODE_REVIEW
+        pullRequest:
+          type:
+          - string
+          - "null"
+        repositoryId:
+          type: string
+          format: uuid
+      required:
+      - baseBranch
+      - branch
+    CreateRepositoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          minLength: 0
+        token:
+          type:
+          - string
+          - "null"
+        url:
+          type: string
+          minLength: 1
+      required:
+      - name
+      - url
+    PageResponseAgentRunResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentRunResponse"
+        page:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int64
+    PageResponseReviewResultSummaryResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewResultSummaryResponse"
+        page:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int64
+    ProblemDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        properties:
+          type: object
+          additionalProperties:
+            type: object
+        status:
+          type: integer
+          format: int32
+        title:
+          type: string
+        type:
+          type: string
+          format: uri
+    RepositoryResponse:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        hasToken:
+          type: boolean
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        secretName:
+          type:
+          - string
+          - "null"
+        updatedAt:
+          type: string
+          format: date-time
+        url:
+          type: string
+    ReviewFindingResponse:
+      type: object
+      properties:
+        category:
+          type:
+          - string
+          - "null"
+        endLine:
+          type:
+          - integer
+          - "null"
+          format: int32
+        file:
+          type: string
+        id:
+          type: integer
+          format: int64
+        message:
+          type: string
+        severity:
+          type: string
+          enum:
+          - BLOCKER
+          - MAJOR
+          - MINOR
+          - INFO
+        startLine:
+          type:
+          - integer
+          - "null"
+          format: int32
+        suggestion:
+          type:
+          - string
+          - "null"
+    ReviewResultResponse:
+      type: object
+      properties:
+        agentRunId:
+          type:
+          - string
+          - "null"
+          format: uuid
+        baseBranch:
+          type: string
+        branch:
+          type: string
+        commitSha:
+          type: string
+        completedAt:
+          type: string
+          format: date-time
+        executionId:
+          type: string
+        findingCount:
+          type: integer
+          format: int64
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFindingResponse"
+        id:
+          type: string
+          format: uuid
+        pullRequest:
+          type:
+          - string
+          - "null"
+        receivedAt:
+          type: string
+          format: date-time
+        repositoryUrl:
+          type: string
+        summary:
+          type: string
+    ReviewResultSummaryResponse:
+      type: object
+      properties:
+        agentRunId:
+          type:
+          - string
+          - "null"
+          format: uuid
+        baseBranch:
+          type: string
+        branch:
+          type: string
+        commitSha:
+          type: string
+        completedAt:
+          type: string
+          format: date-time
+        executionId:
+          type: string
+        findingCount:
+          type: integer
+          format: int64
+        id:
+          type: string
+          format: uuid
+        pullRequest:
+          type:
+          - string
+          - "null"
+        receivedAt:
+          type: string
+          format: date-time
+        repositoryUrl:
+          type: string
+        summary:
+          type: string
+    RunCreatorResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+    UpdateRepositoryRequest:
+      type: object
+      properties:
+        clearToken:
+          type: boolean
+        token:
+          type:
+          - string
+          - "null"
+        url:
+          type:
+          - string
+          - "null"
+    UserResponse:
+      type: object
+      properties:
+        email:
+          type:
+          - string
+          - "null"
+        id:
+          type: string
+          format: uuid
+        issuer:
+          type: string
+        subject:
+          type: string
+        username:
+          type: string
+  securitySchemes:
+    bearerAuth:
+      bearerFormat: JWT
+      description: Access token issued by the OIDC provider announced by `GET /api/v1/auth/config`.
+      scheme: bearer
+      type: http

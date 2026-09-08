@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sift-web
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/name: sift-web
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  type: ClusterIP
+  selector:
+    app: sift-web
+  ports:
+    - {name: http, port: 80, targetPort: http}

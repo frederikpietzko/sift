@@ -1,0 +1,7 @@
+# Build context for apps/web/Dockerfile: sources + manifests only, no installed modules or build outputs.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.eslintcache
+.git

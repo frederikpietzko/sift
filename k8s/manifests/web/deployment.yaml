@@ -1,0 +1,69 @@
+# Requires: the `sift-server` Service (k8s/manifests/server/service.yaml) in the same namespace — nginx
+# proxies every `/api/` request to it, so the browser talks to one origin and the server needs no CORS
+# configuration. No Secret and no ServiceAccount permissions are needed: the SPA is static, the user's
+# bearer token is obtained in the browser directly from the OIDC provider and only passes through nginx.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sift-web
+  namespace: sift-dev
+  labels:
+    app.kubernetes.io/name: sift-web
+    app.kubernetes.io/managed-by: sift-local-dev
+spec:
+  # Stateless; scale freely. SSE streams are held open per browser tab and are proxied unbuffered.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sift-web
+  template:
+    metadata:
+      labels:
+        app: sift-web
+        app.kubernetes.io/name: sift-web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # nginx-unprivileged's built-in `nginx` user.
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          # Placeholder: no web image is published yet. Build it with
+          # `docker build -f apps/web/Dockerfile -t sift-web:dev web/` and replace with the digest-pinned
+          # image before deploying to a shared cluster.
+          image: jbfpietzko/sift-web:latest
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            # Upstream of the `/api/` and `/v3/api-docs` proxy; the ClusterIP Service of the server.
+            - name: SIFT_SERVER_UPSTREAM
+              value: http://sift-server:8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 15
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            # pid file, proxy/client temp paths and the envsubst-rendered server block (see the Dockerfile).
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

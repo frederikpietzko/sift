@@ -1,5 +1,6 @@
 package org.sift.server.agents.web
 
+import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
 import org.sift.server.agents.AgentKind
@@ -40,6 +41,11 @@ data class AgentRunResponse(
     val phase: AgentPhase,
     val reason: String?,
     val message: String?,
+    /** Kind-specific run parameters, e.g. [CodeReviewRunSpec] for `CODE_REVIEW`; documented as a free-form object. */
+    @field:Schema(
+        implementation = Map::class,
+        description = "Kind-specific run parameters, e.g. `CodeReviewRunSpec` for `CODE_REVIEW`",
+    )
     val spec: JsonNode,
     val createdAt: OffsetDateTime,
     val startedAt: OffsetDateTime?,

@@ -2,6 +2,7 @@ package org.sift.server.users
 
 import jakarta.servlet.http.HttpServletRequest
 import org.sift.server.users.User
+import org.springdoc.core.utils.SpringDocUtils
 import org.springframework.core.MethodParameter
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException
 import org.springframework.stereotype.Component
@@ -38,9 +39,16 @@ class CurrentUserArgumentResolver : HandlerMethodArgumentResolver {
     }
 }
 
-/** Picked up by the MVC slice and the full application alike, so `@CurrentUser` works wherever MVC runs. */
+/**
+ * Picked up by the MVC slice and the full application alike, so `@CurrentUser` works wherever MVC runs. The
+ * parameter is resolved from the bearer token, so springdoc must not document it as a query parameter.
+ */
 @Component
 class CurrentUserWebMvcConfigurer : WebMvcConfigurer {
+    init {
+        SpringDocUtils.getConfig().addAnnotationsToIgnore(CurrentUser::class.java)
+    }
+
     override fun addArgumentResolvers(resolvers: MutableList<HandlerMethodArgumentResolver>) {
         resolvers.add(CurrentUserArgumentResolver())
     }

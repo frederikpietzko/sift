@@ -42,6 +42,18 @@ spring:
       # SSE watch streams are open-ended; the container must not time out async requests.
       request-timeout: -1
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  # Only the public REST/SSE API; actuator and framework endpoints stay out of the contract.
+  paths-to-match: /api/**
+  # Deterministic output so `api/openapi.yaml` diffs are meaningful.
+  writer-with-order-by-keys: true
+  # Controllers do not declare `produces`; document what the converters actually emit instead of `*/*`.
+  default-produces-media-type: application/json
+  swagger-ui:
+    enabled: false
+
 management:
   endpoints:
     web:

@@ -15,7 +15,8 @@ import tools.jackson.databind.json.JsonMapper
 /**
  * OAuth2 resource server: every request carries a JWT bearer token issued by the configured provider
  * (`spring.security.oauth2.resourceserver.jwt.*`), so there is no session, no CSRF surface and no login form.
- * Only the health/info probes and the anonymous auth discovery endpoint the web client bootstraps from stay open.
+ * Only the health/info probes, the anonymous auth discovery endpoint the web client bootstraps from and the OpenAPI
+ * description (`/v3/api-docs`, the contract clients are generated from) stay open.
  * Every authenticated caller is upserted into `users` by [UserProvisioningFilter] so controllers can inject it with
  * [CurrentUser]. Authorization is flat for now: any authenticated user may use the whole API (ADR 0016).
  */
@@ -63,6 +64,12 @@ class SecurityConfiguration {
             "/actuator/health/**",
             "/actuator/info",
             AuthConfigController.PATH,
+            OPENAPI_PATH,
+            "$OPENAPI_PATH/**",
+            "$OPENAPI_PATH.yaml",
         )
+
+        /** Matches `springdoc.api-docs.path`; the `.yaml` rendering and grouped sub-paths are permitted as well. */
+        const val OPENAPI_PATH = "/v3/api-docs"
     }
 }

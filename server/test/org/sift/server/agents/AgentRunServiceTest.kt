@@ -38,11 +38,13 @@ class AgentRunServiceTest {
         every { resourceName(any()) } answers { "cr-${firstArg<UUID>()}" }
     }
     private val repositories = mockk<RepositoryService>()
+    private val cleanup = mockk<AgentRunCleanup>(relaxed = true)
     private val clock = Clock.fixed(Instant.parse("2026-09-07T10:00:00Z"), ZoneOffset.UTC)
     private val mapper = JsonMapper.builder().addModule(kotlinModule()).build()
     private val service = AgentRunService(
         runs = runs,
         adapters = listOf(adapter),
+        cleanups = listOf(cleanup),
         repositories = repositories,
         transactions = TransactionOperations.withoutTransaction(),
         mapper = mapper,
@@ -170,6 +172,40 @@ class AgentRunServiceTest {
         assertFailsWith<NotFoundException> { service.cancel(missing) }
         verify(exactly = 0) { adapter.delete(any()) }
         verify(exactly = 0) { runs.update(any()) }
+    }
+
+    @Test
+    fun `delete cancels a running run, lets other modules clean up and removes the row`() {
+        val run = run(phase = AgentPhase.RUNNING)
+        every { runs.findById(run.id) } returns run
+        every { adapter.delete(run) } returns Unit
+        every { runs.delete(run.id) } returns true
+
+        service.delete(run.id)
+
+        verify(exactly = 1) { adapter.delete(run) }
+        verify(exactly = 1) { cleanup.deleteForRun(run.id) }
+        verify(exactly = 1) { runs.delete(run.id) }
+        verify(exactly = 0) { runs.update(any()) }
+    }
+
+    @Test
+    fun `delete of a terminal run leaves the CR alone and unknown ids are not found`() {
+        val run = run(phase = AgentPhase.SUCCESS)
+        every { runs.findById(run.id) } returns run
+        every { runs.delete(run.id) } returns true
+
+        service.delete(run.id)
+
+        verify(exactly = 0) { adapter.delete(any()) }
+        verify(exactly = 1) { cleanup.deleteForRun(run.id) }
+        verify(exactly = 1) { runs.delete(run.id) }
+
+        val missing = UUID.randomUUID()
+        every { runs.findById(missing) } returns null
+        assertFailsWith<NotFoundException> { service.delete(missing) }
+        verify(exactly = 0) { cleanup.deleteForRun(missing) }
+        verify(exactly = 0) { runs.delete(missing) }
     }
 
     @Test

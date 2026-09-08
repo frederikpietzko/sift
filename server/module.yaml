@@ -30,6 +30,8 @@ dependencies:
   - $libs.fabrics8.kubernetes.client
   # Annotations only (@ApplicationModule, @NamedInterface); the structure is verified in tests.
   - $libs.spring.modulith.api
+  # OpenAPI description only (`/v3/api-docs`); the committed contract lives in `api/openapi.yaml`.
+  - $libs.springdoc.openapi.starter.webmvc.api
   - //k8s/crds
   - //messaging
 

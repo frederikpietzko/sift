@@ -27,10 +27,12 @@ import java.util.UUID
  * always finds it, and an apply failure is recorded as `FAILED` instead of rolling the run away.
  */
 @Service
-@Suppress("TooManyFunctions") // one method per use case; the run lifecycle is owned by this single service
+// One method and one collaborator per use case: the whole run lifecycle is owned by this single service.
+@Suppress("TooManyFunctions", "LongParameterList")
 class AgentRunService(
     private val runs: AgentRunRepository,
     adapters: List<AgentKindAdapter>,
+    private val cleanups: List<AgentRunCleanup>,
     private val repositories: RepositoryService,
     private val transactions: TransactionOperations,
     private val mapper: JsonMapper,
@@ -116,6 +118,20 @@ class AgentRunService(
                 updatedAt = now(),
             ),
         )
+    }
+
+    /**
+     * Removes a run and everything attached to it. A run that has not reached a terminal phase is cancelled
+     * first (its `CodeReview` CR is deleted), so nothing keeps executing for a run that no longer exists.
+     */
+    @Transactional
+    fun delete(id: UUID) {
+        val run = find(id)
+        if (!run.phase.terminal) {
+            adapterFor(run.kind).delete(run)
+        }
+        cleanups.forEach { it.deleteForRun(run.id) }
+        check(runs.delete(run.id)) { "Agent run $id does not exist" }
     }
 
     /**
