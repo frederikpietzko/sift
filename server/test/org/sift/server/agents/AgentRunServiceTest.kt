@@ -10,6 +10,7 @@ import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
 import org.sift.server.repositories.Repository
 import org.sift.server.repositories.RepositoryService
+import org.sift.server.users.TestUsers
 import org.springframework.transaction.support.TransactionOperations
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.kotlinModule
@@ -74,11 +75,12 @@ class AgentRunServiceTest {
         every { runs.insert(capture(inserted)) } answers { inserted.captured }
         every { adapter.apply(any(), request) } answers { AppliedResource("cr-${firstArg<AgentRun>().id}", "uid-1") }
 
-        val run = service.create(request)
+        val run = service.create(request, TestUsers.alice)
 
         assertEquals(AgentPhase.CREATED, inserted.captured.phase)
         assertEquals(RunSource.API, inserted.captured.source)
         assertEquals(repositoryId, inserted.captured.repositoryId)
+        assertEquals(RunCreator(TestUsers.ALICE_ID, TestUsers.alice.username), inserted.captured.createdBy)
         assertEquals("cr-${run.id}", inserted.captured.crName)
         assertNull(inserted.captured.crUid)
         assertEquals("https://github.com/sift/sift.git", inserted.captured.spec["repositoryUrl"].asString())
@@ -91,6 +93,7 @@ class AgentRunServiceTest {
         assertEquals("uid-1", run.crUid)
         assertEquals("cr-${run.id}", run.crName)
         assertEquals(AgentPhase.CREATED, run.phase)
+        assertEquals(RunCreator(TestUsers.ALICE_ID, TestUsers.alice.username), run.createdBy)
         verify(exactly = 1) { adapter.apply(inserted.captured, request) }
         verify(exactly = 1) { runs.update(run) }
     }
@@ -101,7 +104,7 @@ class AgentRunServiceTest {
         every { runs.update(capture(updated)) } answers { updated.captured }
         every { adapter.apply(any(), request) } throws KubernetesClientException("forbidden")
 
-        val thrown = assertFailsWith<KubernetesClientException> { service.create(request) }
+        val thrown = assertFailsWith<KubernetesClientException> { service.create(request, TestUsers.alice) }
 
         assertEquals("forbidden", thrown.message)
         assertEquals(AgentPhase.FAILED, updated.captured.phase)
@@ -116,7 +119,7 @@ class AgentRunServiceTest {
         every { runs.update(any()) } throws IllegalStateException("db down")
         every { adapter.apply(any(), request) } throws KubernetesClientException("forbidden")
 
-        val thrown = assertFailsWith<KubernetesClientException> { service.create(request) }
+        val thrown = assertFailsWith<KubernetesClientException> { service.create(request, TestUsers.alice) }
 
         assertEquals("forbidden", thrown.message)
         assertEquals(listOf("db down"), thrown.suppressed.map { it.message })
@@ -127,7 +130,7 @@ class AgentRunServiceTest {
     fun `create rejects an unknown repository before persisting anything`() {
         val unknown = UUID.randomUUID()
         every { repositories.get(unknown) } throws NotFoundException("Repository $unknown not found")
-        assertFailsWith<NotFoundException> { service.create(request.copy(repositoryId = unknown)) }
+        assertFailsWith<NotFoundException> { service.create(request.copy(repositoryId = unknown), TestUsers.alice) }
         verify(exactly = 0) { runs.insert(any()) }
         verify(exactly = 0) { adapter.apply(any(), any()) }
     }
@@ -188,6 +191,7 @@ class AgentRunServiceTest {
         assertEquals(RunSource.EXTERNAL, run.source)
         assertEquals(AgentKind.CODE_REVIEW, run.kind)
         assertNull(run.repositoryId)
+        assertNull(run.createdBy)
         assertEquals("review-x", run.crName)
         assertEquals("uid-ext", run.crUid)
         assertEquals(2L, run.generation)

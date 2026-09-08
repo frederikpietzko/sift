@@ -1,6 +1,8 @@
 package org.sift.server.agents
 
 import jakarta.validation.Valid
+import org.sift.server.security.CurrentUser
+import org.sift.server.users.User
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
@@ -17,26 +19,41 @@ import java.util.UUID
  * The literal `/api/v1/agents/watch` (SSE, `AgentWatchController`) is more specific than `/{id}` and wins the
  * mapping; the UUID pattern on `{id}` additionally guarantees `watch` can never be parsed as a run id (`406`)
  * when a client omits the `text/event-stream` accept header.
+ *
+ * Listing accepts `mine=true` (only the caller's runs) or `createdBy=<user id>`; both together are only allowed
+ * when they name the same user.
  */
 @RestController
 @RequestMapping("/api/v1/agents")
 class AgentRunController(private val service: AgentRunService) {
     @PostMapping
-    fun create(@Valid @RequestBody request: CreateAgentRunRequest): ResponseEntity<AgentRunResponse> {
-        val run = service.create(request)
+    fun create(
+        @Valid @RequestBody request: CreateAgentRunRequest,
+        @CurrentUser user: User,
+    ): ResponseEntity<AgentRunResponse> {
+        val run = service.create(request, user)
         val location = ServletUriComponentsBuilder.fromCurrentRequest().path("/{id}").build(run.id)
         return ResponseEntity.accepted().location(location).body(AgentRunResponse.from(run))
     }
 
     @GetMapping
+    @Suppress("LongParameterList") // one parameter per query string filter
     fun list(
         @RequestParam(required = false) kind: AgentKind?,
         @RequestParam(required = false) phase: AgentPhase?,
         @RequestParam(required = false) repositoryId: UUID?,
+        @RequestParam(defaultValue = "false") mine: Boolean,
+        @RequestParam(required = false) createdBy: UUID?,
         @RequestParam(defaultValue = "0") page: Int,
         @RequestParam(defaultValue = "20") size: Int,
+        @CurrentUser user: User,
     ): PageResponse<AgentRunResponse> {
-        val filter = AgentRunFilter(kind = kind, phase = phase, repositoryId = repositoryId)
+        val filter = AgentRunFilter(
+            kind = kind,
+            phase = phase,
+            repositoryId = repositoryId,
+            createdBy = AgentRunFilter.resolveCreatedBy(mine = mine, createdBy = createdBy, user = user),
+        )
         return PageResponse.from(service.list(filter, page, size), AgentRunResponse::from)
     }
 

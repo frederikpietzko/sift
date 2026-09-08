@@ -23,7 +23,11 @@ class RepositorySecretSyncTest {
     lateinit var client: KubernetesClient
     lateinit var server: KubernetesMockServer
 
-    private val properties = ServerProperties(namespace = "sift-test", encryptionKey = "unused")
+    private val properties = ServerProperties(
+        namespace = "sift-test",
+        encryptionKey = "unused",
+        auth = ServerProperties.Auth(clientId = "sift-web"),
+    )
     private val sync by lazy { RepositorySecretSync(client, properties) }
     private val id: UUID = UUID.fromString("9b2c0c8e-1f4e-4c21-a9c8-4b1b5e1f8d10")
     private val path = "/api/v1/namespaces/sift-test/secrets/sift-repo-$id"

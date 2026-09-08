@@ -175,16 +175,40 @@ no second agent location variable is introduced.
 
 ## Running the server locally
 
-The [server](server.md) can run on the host next to the operator. It uses the Compose Postgres
-and RabbitMQ directly (`localhost:5432` / `localhost:5672`, defaults in
-`server/resources/application.yaml`) and the same host `.kubeconfig` as the operator to create
-`CodeReview` CRs and `sift-repo-*` Secrets in `sift-dev`:
+The [server](server.md) can run on the host next to the operator. It uses the Compose Postgres,
+RabbitMQ and Keycloak directly (`localhost:5432` / `localhost:5672` /
+`http://localhost:8180/realms/sift`, defaults in `server/resources/application.yaml`) and the same
+host `.kubeconfig` as the operator to create `CodeReview` CRs and `sift-repo-*` Secrets in
+`sift-dev`:
 
 ```shell
-docker compose up -d postgres rabbitmq
+docker compose up -d --wait postgres rabbitmq keycloak
 KUBECONFIG="$PWD/.kubeconfig" SIFT_SERVER_NAMESPACE=sift-dev \
   SIFT_SERVER_ENCRYPTION_KEY=$(openssl rand -base64 32) ./kotlin run --module server
 ```
+
+The API requires a JWT bearer token from the configured issuer
+([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md)); only the actuator
+probes and `GET /api/v1/auth/config` are anonymous. The Compose Keycloak imports the `sift` realm
+from `config/keycloak/sift-realm.json` on every start: public PKCE client `sift-web`, audience
+`sift-server`, dev user **`dev`/`dev`** (`dev@sift.local`) and the e2e user `e2e`/`e2e`; the admin
+console is `http://localhost:8180` (`admin`/`admin`). Keycloak needs 10–40 s on a cold start, which
+`--wait` covers. For manual API calls obtain a token with the password grant (enabled on the dev
+realm only) and send it as `Authorization: Bearer`:
+
+```shell
+TOKEN=$(curl -s -d grant_type=password -d client_id=sift-web -d username=dev -d password=dev \
+  -d 'scope=openid profile email' http://localhost:8180/realms/sift/protocol/openid-connect/token | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/me
+curl -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/api/v1/agents?mine=true'
+```
+
+Tokens expire after 5 minutes; rerun the first line to renew. To use another identity provider set
+`SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI`, `SIFT_SERVER_AUTH_CLIENT_ID` and, if the
+tokens carry a different or no audience, `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES`
+(empty string disables the check); see the [server configuration](server.md#configuration). After
+editing the realm file recreate the container (`docker compose rm -sf keycloak && docker compose
+up -d --wait keycloak`), because the import ignores an existing realm.
 
 As with the operator, the host JVM authenticates with the root kubeconfig, not with the
 `sift-server` ServiceAccount. `k8s/manifests/server/rbac.yaml` (ServiceAccount, Role,
@@ -192,9 +216,12 @@ RoleBinding) is what an **in-cluster** deployment uses; `configmap.yaml`, `deplo
 and `service.yaml` in the same directory complete it and expect an administrator-created
 `sift-server-secrets` Secret (see [server deployment](server.md#deployment)). The
 operator's `SPRING_RABBITMQ_*` settings and the server's must point at the same broker so
-`code-review.status`/`code-review.completed` events reach the server's queues. The API has no
-authentication ([ADR 0014](../adrs/0014-defer-server-api-authentication.md)); on a shared
-host add `SERVER_ADDRESS=127.0.0.1` so it only listens on loopback.
+`code-review.status`/`code-review.completed` events reach the server's queues. The in-cluster
+`configmap.yaml` points the issuer at `http://host.docker.internal:8180/realms/sift`, i.e. the
+Compose Keycloak as seen from kind; the token's `iss` must match that value exactly, so a browser
+client of an in-cluster server must log in through the same URL. Authentication does not replace
+TLS or a network boundary: on a shared host add `SERVER_ADDRESS=127.0.0.1` so the server only
+listens on loopback, and the dev realm runs with `sslRequired: none` and well-known passwords.
 
 ## Manual CodeReview application
 

@@ -4,6 +4,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone
 import org.jetbrains.exposed.v1.json.jsonb
 import org.sift.server.repositories.RepositoriesTable
+import org.sift.server.users.UsersTable
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.kotlinModule
@@ -31,11 +32,14 @@ object AgentRunsTable : Table("agent_runs") {
     val completedAt = timestampWithTimeZone("completed_at").nullable()
     val observedAt = timestampWithTimeZone("observed_at").nullable()
     val updatedAt = timestampWithTimeZone("updated_at")
+    /** `null` for `EXTERNAL` runs that were first seen through a status event rather than requested via the API. */
+    val createdBy = uuid("created_by").references(UsersTable.id).nullable()
 
     override val primaryKey = PrimaryKey(id)
 
     init {
         index(customIndexName = "agent_runs_phase", isUnique = false, phase, createdAt)
+        index(customIndexName = "agent_runs_created_by", isUnique = false, createdBy, createdAt)
     }
 }
 

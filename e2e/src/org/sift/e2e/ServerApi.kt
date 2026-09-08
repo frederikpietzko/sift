@@ -78,13 +78,17 @@ class SseStream(private val response: HttpResponse<InputStream>) : Closeable {
 /**
  * Thin JDK `HttpClient` + Jackson 3 client for the server's public API. Deliberately free of Spring
  * so the e2e module never shares a classpath with the server it is testing.
+ *
+ * Every request carries `Authorization: Bearer <token>` when [tokenSupplier] yields a token; it is
+ * consulted per request so the supplier can refresh short-lived tokens transparently. Pass
+ * `{ null }` for an anonymous client.
  */
-class ServerApi(private val baseUrl: String) {
+class ServerApi(private val baseUrl: String, private val tokenSupplier: () -> String? = { null }) {
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build()
     private val mapper = SseFrameReader.defaultMapper
 
     fun post(path: String, json: String): ApiResponse {
-        val request = HttpRequest.newBuilder(uri(path))
+        val request = request(path)
             .timeout(REQUEST_TIMEOUT)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
@@ -94,7 +98,7 @@ class ServerApi(private val baseUrl: String) {
     }
 
     fun get(path: String): ApiResponse {
-        val request = HttpRequest.newBuilder(uri(path))
+        val request = request(path)
             .timeout(REQUEST_TIMEOUT)
             .header("Accept", "application/json")
             .GET()
@@ -111,11 +115,17 @@ class ServerApi(private val baseUrl: String) {
 
     /** Opens the SSE watch for one run; the caller owns the returned stream. */
     fun watch(agentId: String): SseStream {
-        val request = HttpRequest.newBuilder(uri("/api/v1/agents/watch?agentId=$agentId"))
+        val request = request("/api/v1/agents/watch?agentId=$agentId")
             .header("Accept", "text/event-stream")
             .GET()
             .build()
         return SseStream(http.send(request, HttpResponse.BodyHandlers.ofInputStream()))
+    }
+
+    private fun request(path: String): HttpRequest.Builder {
+        val builder = HttpRequest.newBuilder(uri(path))
+        tokenSupplier()?.let { builder.header("Authorization", "Bearer $it") }
+        return builder
     }
 
     private fun uri(path: String): URI = URI.create(baseUrl.trimEnd('/') + path)
@@ -130,6 +140,7 @@ class ServerApi(private val baseUrl: String) {
         const val HTTP_OK = 200
         const val HTTP_CREATED = 201
         const val HTTP_ACCEPTED = 202
+        const val HTTP_UNAUTHORIZED = 401
         private val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(10)
         private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(30)
     }

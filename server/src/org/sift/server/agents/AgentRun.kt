@@ -1,5 +1,6 @@
 package org.sift.server.agents
 
+import org.sift.server.users.User
 import tools.jackson.databind.JsonNode
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -48,13 +49,36 @@ data class AgentRun(
     val completedAt: OffsetDateTime?,
     val observedAt: OffsetDateTime?,
     val updatedAt: OffsetDateTime,
+    /** The user who requested the run through the API; `null` for `EXTERNAL` runs. */
+    val createdBy: RunCreator? = null,
+)
+
+/** Denormalised view of the `users` row behind `agent_runs.created_by`. */
+data class RunCreator(
+    val id: UUID,
+    val username: String,
 )
 
 data class AgentRunFilter(
     val kind: AgentKind? = null,
     val phase: AgentPhase? = null,
     val repositoryId: UUID? = null,
-)
+    val createdBy: UUID? = null,
+) {
+    companion object {
+        /**
+         * Resolves the `mine` / `createdBy` query parameters to a creator id: `mine=true` means the caller;
+         * combining it with a `createdBy` that names somebody else is a contradiction and rejected (`400`).
+         */
+        fun resolveCreatedBy(mine: Boolean, createdBy: UUID?, user: User): UUID? {
+            if (!mine) return createdBy
+            require(createdBy == null || createdBy == user.id) {
+                "mine=true cannot be combined with createdBy=$createdBy"
+            }
+            return user.id
+        }
+    }
+}
 
 data class Page<T>(
     val items: List<T>,

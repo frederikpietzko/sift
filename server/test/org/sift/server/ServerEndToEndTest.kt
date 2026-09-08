@@ -11,9 +11,11 @@ import org.sift.events.CodeReviewStatusChangedEvent
 import org.sift.events.Finding
 import org.sift.events.Severity
 import org.sift.messaging.EventPublisher
+import org.sift.server.security.TestTokens
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
@@ -36,7 +38,8 @@ import kotlin.test.assertTrue
 /**
  * One full round trip over the real wire: REST → CR apply (fabric8 mocked) → operator status event over
  * RabbitMQ → SSE watch → `code-review.completed` event → result query and run promotion. Everything else
- * (Postgres, RabbitMQ, listeners, the `LISTEN/NOTIFY` watch) is real.
+ * (Postgres, RabbitMQ, listeners, the `LISTEN/NOTIFY` watch, the bearer-token filter chain) is real; only the
+ * JWT decoder is the test one, so requests carry a [TestTokens] bearer.
  */
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -58,7 +61,12 @@ class ServerEndToEndTest : RabbitMqIntegrationTest() {
 
     private val mapper = JsonMapper.builder().build()
     private val http: HttpClient = HttpClient.newHttpClient()
-    private val rest: RestClient by lazy { RestClient.create("http://localhost:$port") }
+    private val rest: RestClient by lazy {
+        RestClient.builder()
+            .baseUrl("http://localhost:$port")
+            .defaultHeader(HttpHeaders.AUTHORIZATION, TestTokens.authorization())
+            .build()
+    }
     private val repositoryName = "e2e-${UUID.randomUUID()}"
 
     /** Everything here is committed for real; remove it so the rolled-back repository tests keep their clean slate. */
@@ -76,6 +84,11 @@ class ServerEndToEndTest : RabbitMqIntegrationTest() {
             repositoryName,
         )
         jdbcTemplate.update("delete from repositories where name = ?", repositoryName)
+        jdbcTemplate.update(
+            "delete from agent_runs where created_by in (select id from users where issuer = ?)",
+            TestTokens.ISSUER,
+        )
+        jdbcTemplate.update("delete from users where issuer = ?", TestTokens.ISSUER)
     }
 
     @Test
@@ -103,9 +116,17 @@ class ServerEndToEndTest : RabbitMqIntegrationTest() {
         val runId = run["id"].asString()
         assertEquals(crUid, run["crUid"].asString())
         assertEquals("CREATED", run["phase"].asString())
+        assertEquals(TestTokens.USERNAME, run["createdBy"]["username"].asString())
+        val creatorId = run["createdBy"]["id"].asString()
+        assertEquals(creatorId, get("/api/v1/me")["id"].asString())
+
+        val mine = get("/api/v1/agents?mine=true&repositoryId=$repositoryId")
+        assertEquals(listOf(runId), mine["items"].values().map { it["id"].asString() }.toList())
+        assertEquals(0L, get("/api/v1/agents?createdBy=${UUID.randomUUID()}")["total"].asLong())
 
         val request = HttpRequest.newBuilder(URI("http://localhost:$port/api/v1/agents/watch?agentId=$runId"))
             .header("Accept", "text/event-stream")
+            .header(HttpHeaders.AUTHORIZATION, TestTokens.authorization())
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofInputStream())
         assertEquals(HttpStatus.OK.value(), response.statusCode())
@@ -148,6 +169,73 @@ class ServerEndToEndTest : RabbitMqIntegrationTest() {
         assertEquals("SUCCESS", finished["phase"].asString())
         assertEquals("ResultReceived", finished["reason"].asString())
         assertTrue(finished["completedAt"].isString)
+    }
+
+    @Test
+    fun `the real filter chain rejects anonymous and rejected tokens with 401 problem details`() {
+        val anonymous = http.send(
+            HttpRequest.newBuilder(URI("http://localhost:$port/api/v1/agents")).build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), anonymous.statusCode())
+        assertTrue(anonymous.headers().firstValue(HttpHeaders.WWW_AUTHENTICATE).orElse("").startsWith("Bearer"))
+        assertTrue(
+            anonymous.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("")
+                .startsWith(MediaType.APPLICATION_PROBLEM_JSON_VALUE),
+        )
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), mapper.readTree(anonymous.body())["status"].asInt())
+
+        val rejected = http.send(
+            HttpRequest.newBuilder(URI("http://localhost:$port/api/v1/agents"))
+                .header(HttpHeaders.AUTHORIZATION, TestTokens.authorization(TestTokens.REJECTED))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), rejected.statusCode())
+        assertTrue(rejected.headers().firstValue(HttpHeaders.WWW_AUTHENTICATE).orElse("").contains("invalid_token"))
+
+        val health = http.send(
+            HttpRequest.newBuilder(URI("http://localhost:$port/actuator/health/readiness")).build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(HttpStatus.OK.value(), health.statusCode())
+
+        val config = http.send(
+            HttpRequest.newBuilder(URI("http://localhost:$port/api/v1/auth/config")).build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(HttpStatus.OK.value(), config.statusCode())
+        assertEquals("sift-web", mapper.readTree(config.body())["clientId"].asString())
+    }
+
+    @Test
+    fun `authenticated callers are provisioned once and refreshed on every request`() {
+        val first = get("/api/v1/me")
+        assertEquals(TestTokens.SUBJECT, first["subject"].asString())
+        assertEquals(TestTokens.ISSUER, first["issuer"].asString())
+        assertEquals(TestTokens.USERNAME, first["username"].asString())
+        assertEquals(TestTokens.EMAIL, first["email"].asString())
+        val userId = first["id"].asString()
+
+        val renamed = http.send(
+            HttpRequest.newBuilder(URI("http://localhost:$port/api/v1/me"))
+                .header(HttpHeaders.AUTHORIZATION, TestTokens.authorization(TestTokens.bearer(username = "alice.renamed")))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(HttpStatus.OK.value(), renamed.statusCode())
+        val second = mapper.readTree(renamed.body())
+        assertEquals(userId, second["id"].asString())
+        assertEquals("alice.renamed", second["username"].asString())
+
+        val rows = jdbcTemplate.queryForList(
+            "select username, last_seen_at > created_at as refreshed from users where issuer = ? and subject = ?",
+            TestTokens.ISSUER,
+            TestTokens.SUBJECT,
+        )
+        assertEquals(1, rows.size)
+        assertEquals("alice.renamed", rows.single()["username"])
+        assertEquals(true, rows.single()["refreshed"])
     }
 
     private fun post(path: String, body: String, expected: HttpStatus): JsonNode {

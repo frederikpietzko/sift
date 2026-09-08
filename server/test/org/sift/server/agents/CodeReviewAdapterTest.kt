@@ -29,7 +29,11 @@ class CodeReviewAdapterTest {
     lateinit var client: KubernetesClient
     lateinit var server: KubernetesMockServer
 
-    private val properties = ServerProperties(namespace = "sift-test", encryptionKey = "unused")
+    private val properties = ServerProperties(
+        namespace = "sift-test",
+        encryptionKey = "unused",
+        auth = ServerProperties.Auth(clientId = "sift-web"),
+    )
     private val repositories = mockk<RepositoryService>()
     private val adapter by lazy { CodeReviewAdapter(client, properties, repositories) }
 

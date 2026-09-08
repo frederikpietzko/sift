@@ -22,6 +22,14 @@ spring:
       simple:
         acknowledge-mode: auto
         default-requeue-rejected: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Any OIDC provider; the JWKS is discovered from the issuer. Defaults point at the Compose Keycloak realm.
+          issuer-uri: ${SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI:http://localhost:8180/realms/sift}
+          # Expected `aud` claim; set to an empty value to disable the audience check.
+          audiences: ${SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES:sift-server}
   exposed:
     generate-ddl: false
     show-sql: false
@@ -48,3 +56,10 @@ sift:
   server:
     namespace: ${SIFT_SERVER_NAMESPACE:sift-dev}
     encryption-key: ${SIFT_SERVER_ENCRYPTION_KEY}
+    auth:
+      # Public PKCE client the web client authenticates as; exposed through GET /api/v1/auth/config.
+      client-id: ${SIFT_SERVER_AUTH_CLIENT_ID:sift-web}
+      scopes: ${SIFT_SERVER_AUTH_SCOPES:openid,profile,email}
+      claims:
+        username: ${SIFT_SERVER_AUTH_CLAIMS_USERNAME:preferred_username}
+        email: ${SIFT_SERVER_AUTH_CLAIMS_EMAIL:email}

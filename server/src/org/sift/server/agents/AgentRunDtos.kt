@@ -41,6 +41,8 @@ data class AgentRunResponse(
     val startedAt: OffsetDateTime?,
     val completedAt: OffsetDateTime?,
     val updatedAt: OffsetDateTime,
+    /** Absent (`null`) for `EXTERNAL` runs. */
+    val createdBy: RunCreatorResponse?,
 ) {
     companion object {
         fun from(run: AgentRun): AgentRunResponse = AgentRunResponse(
@@ -60,9 +62,15 @@ data class AgentRunResponse(
             startedAt = run.startedAt,
             completedAt = run.completedAt,
             updatedAt = run.updatedAt,
+            createdBy = run.createdBy?.let { RunCreatorResponse(id = it.id, username = it.username) },
         )
     }
 }
+
+data class RunCreatorResponse(
+    val id: UUID,
+    val username: String,
+)
 
 data class PageResponse<T>(
     val items: List<T>,

@@ -17,15 +17,16 @@ import kotlin.time.toJavaDuration
 
 /**
  * The one happy path, driven purely through the server's public API against the real stack booted by
- * [SiftEnvironment]: repository → `CODE_REVIEW` run → SSE watch to `SUCCESS` → result via REST.
- * Assertions are limited to stable contracts (status codes, phase transitions, presence/shape of the
- * result); nothing about the LLM output, timings or intermediate resource names is checked.
+ * [SiftEnvironment]: repository → `CODE_REVIEW` run → SSE watch to `SUCCESS` → result via REST, all
+ * authenticated as the Keycloak `e2e` user. Assertions are limited to stable contracts (status codes,
+ * phase transitions, run attribution, presence/shape of the result); nothing about the LLM output,
+ * timings or intermediate resource names is checked.
  */
 @EnabledIfEnvironmentVariable(named = "SIFT_E2E", matches = "true")
 @ExtendWith(SiftEnvironment::class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
-    private val api by lazy { ServerApi(env.serverBaseUrl) }
+    private val api by lazy { env.api() }
     private val repositoryName = "e2e-${UUID.randomUUID()}"
 
     @Test
@@ -39,6 +40,7 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
             crName = run.path("crName").asString()
             val runId = run.path("id").asString()
             val crUid = run.path("crUid").asString()
+            verifyAttribution(runId, repositoryId)
 
             val outcome = watchUntilSuccess(runId)
             assertTrue(RunObserver.RUNNING in outcome.phases, "RUNNING must precede SUCCESS; observed ${outcome.phases}")
@@ -83,11 +85,23 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
             }
         }
 
+    private fun verifyAttribution(runId: String, repositoryId: String) {
+        val me = api.getJson("/api/v1/me")
+        assertEquals(Compose.E2E_USER, me.path("username").asString())
+        val run = api.getJson("/api/v1/agents/$runId")
+        assertEquals(Compose.E2E_USER, run.path("createdBy").path("username").asString(), run.toString())
+        assertEquals(me.path("id").asString(), run.path("createdBy").path("id").asString(), run.toString())
+
+        val mine = api.getJson("/api/v1/agents?mine=true&repositoryId=$repositoryId")
+        assertTrue(mine.path("items").any { it.path("id").asString() == runId }, "?mine=true must list $runId: $mine")
+    }
+
     private fun verifyRun(runId: String, crUid: String) {
         val run = api.getJson("/api/v1/agents/$runId")
         assertEquals(RunObserver.SUCCESS, run.path("phase").asString())
         assertTrue(run.path("completedAt").isString, "completedAt must be present")
         assertEquals("$crUid:1", run.path("executionId").asString())
+        assertEquals(Compose.E2E_USER, run.path("createdBy").path("username").asString())
     }
 
     private fun verifyResult(runId: String, spec: ReviewSpec) {

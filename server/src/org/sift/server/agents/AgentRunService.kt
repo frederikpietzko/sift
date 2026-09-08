@@ -4,6 +4,7 @@ import org.sift.events.CodeReviewStatusChangedEvent
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
 import org.sift.server.repositories.RepositoryService
+import org.sift.server.users.User
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -32,9 +33,10 @@ class AgentRunService(
     private val log = LoggerFactory.getLogger(AgentRunService::class.java)
     private val adapters: Map<AgentKind, AgentKindAdapter> = adapters.associateBy { it.kind }
 
-    fun create(request: CreateAgentRunRequest): AgentRun {
+    /** Requests a new run on behalf of [user], who is recorded as its creator. */
+    fun create(request: CreateAgentRunRequest, user: User): AgentRun {
         val adapter = adapterFor(request.kind)
-        val created = transactions.execute { persistCreated(adapter, request) }
+        val created = transactions.execute { persistCreated(adapter, request, user) }
         val applied = runCatching { adapter.apply(created, request) }.getOrElse { exception ->
             log.warn("Applying {} for run {} failed", request.kind, created.id, exception)
             runCatching {
@@ -118,7 +120,7 @@ class AgentRunService(
         }
     }
 
-    private fun persistCreated(adapter: AgentKindAdapter, request: CreateAgentRunRequest): AgentRun {
+    private fun persistCreated(adapter: AgentKindAdapter, request: CreateAgentRunRequest, user: User): AgentRun {
         val repository = repositories.get(request.repositoryId)
         val id = UUID.randomUUID()
         val now = now()
@@ -148,10 +150,12 @@ class AgentRunService(
                 completedAt = null,
                 observedAt = null,
                 updatedAt = now,
+                createdBy = RunCreator(id = user.id, username = user.username),
             ),
         )
     }
 
+    /** Runs first seen through a status event have no API caller behind them, so `createdBy` stays `null`. */
     private fun externalRun(event: CodeReviewStatusChangedEvent, phase: AgentPhase): AgentRun {
         val now = now()
         val spec = CodeReviewRunSpec(

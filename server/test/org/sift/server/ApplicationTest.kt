@@ -23,22 +23,22 @@ class ApplicationTest : PostgresIntegrationTest() {
     }
 
     @Test
-    fun `flyway applied the initial migration`() {
+    fun `flyway applied all migrations in order`() {
         val versions = jdbcTemplate.queryForList(
             "select version from flyway_schema_history where success order by installed_rank",
             String::class.java,
         )
-        assertEquals(listOf("1"), versions)
+        assertEquals(listOf("1", "2"), versions)
     }
 
     @Test
-    fun `initial schema contains all tables and the agent runs trigger`() {
+    fun `schema contains all tables and the agent runs trigger`() {
         val tables = jdbcTemplate.queryForList(
             "select table_name from information_schema.tables where table_schema = 'public'",
             String::class.java,
         ).toSet()
         assertTrue(
-            tables.containsAll(listOf("repositories", "agent_runs", "review_results", "review_findings")),
+            tables.containsAll(listOf("repositories", "agent_runs", "review_results", "review_findings", "users")),
             tables.toString(),
         )
 

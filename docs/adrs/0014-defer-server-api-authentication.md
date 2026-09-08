@@ -4,7 +4,9 @@ Date: 2026-09-07
 
 ## Status
 
-Accepted
+Superseded by [ADR 0016](0016-oauth2-resource-server-and-user-attribution.md) (OAuth2 resource
+server with JWT bearer tokens and user attribution). Kept for the reasoning behind the interim
+anonymous API.
 
 ## Context
 

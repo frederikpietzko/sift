@@ -4,25 +4,28 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greater
-import org.jetbrains.exposed.v1.jdbc.Query
-import org.jetbrains.exposed.v1.jdbc.andWhere
-import org.jetbrains.exposed.v1.jdbc.insert
-import org.jetbrains.exposed.v1.jdbc.selectAll
-import org.jetbrains.exposed.v1.jdbc.update
+import org.jetbrains.exposed.v1.jdbc.*
+import org.sift.server.users.UsersTable
 import java.time.OffsetDateTime
-import java.util.UUID
+import java.util.*
 import kotlin.uuid.toJavaUuid
 import kotlin.uuid.toKotlinUuid
 
-/** Blocking Exposed DSL access to `agent_runs`; callers own the Spring transaction. */
+/**
+ * Blocking Exposed DSL access to `agent_runs`; callers own the Spring transaction. Reads left-join `users` so
+ * the creator's username travels with the run (`created_by` is immutable after [insert]).
+ */
 @org.springframework.stereotype.Repository
 class AgentRunRepository {
+    private val runsWithCreator = AgentRunsTable.leftJoin(UsersTable)
+
     fun insert(run: AgentRun): AgentRun {
         AgentRunsTable.insert {
             it[id] = run.id.toKotlinUuid()
             it[kind] = run.kind.name
             it[runSource] = run.source.name
             it[repositoryId] = run.repositoryId?.toKotlinUuid()
+            it[createdBy] = run.createdBy?.id?.toKotlinUuid()
             it[crName] = run.crName
             it[crUid] = run.crUid
             it[generation] = run.generation
@@ -78,13 +81,13 @@ class AgentRunRepository {
     }
 
     fun findById(id: UUID): AgentRun? =
-        AgentRunsTable.selectAll().where { AgentRunsTable.id eq id.toKotlinUuid() }.singleOrNull()?.toAgentRun()
+        runsWithCreator.selectAll().where { AgentRunsTable.id eq id.toKotlinUuid() }.singleOrNull()?.toAgentRun()
 
     fun findByCrUid(crUid: String): AgentRun? =
-        AgentRunsTable.selectAll().where { AgentRunsTable.crUid eq crUid }.singleOrNull()?.toAgentRun()
+        runsWithCreator.selectAll().where { AgentRunsTable.crUid eq crUid }.singleOrNull()?.toAgentRun()
 
     /** `execution_id` is not unique; the newest run (by `created_at`) wins should several carry the same one. */
-    fun findByExecutionId(executionId: String): AgentRun? = AgentRunsTable.selectAll()
+    fun findByExecutionId(executionId: String): AgentRun? = runsWithCreator.selectAll()
         .where { AgentRunsTable.executionId eq executionId }
         .orderBy(AgentRunsTable.createdAt, SortOrder.DESC)
         .limit(1)
@@ -115,10 +118,11 @@ class AgentRunRepository {
     }
 
     private fun filtered(filter: AgentRunFilter): Query {
-        val query = AgentRunsTable.selectAll()
+        val query = runsWithCreator.selectAll()
         filter.kind?.let { kind -> query.andWhere { AgentRunsTable.kind eq kind.name } }
         filter.phase?.let { phase -> query.andWhere { AgentRunsTable.phase eq phase.name } }
         filter.repositoryId?.let { id -> query.andWhere { AgentRunsTable.repositoryId eq id.toKotlinUuid() } }
+        filter.createdBy?.let { id -> query.andWhere { AgentRunsTable.createdBy eq id.toKotlinUuid() } }
         return query
     }
 
@@ -140,5 +144,8 @@ class AgentRunRepository {
         completedAt = this[AgentRunsTable.completedAt],
         observedAt = this[AgentRunsTable.observedAt],
         updatedAt = this[AgentRunsTable.updatedAt],
+        createdBy = this[AgentRunsTable.createdBy]?.let { userId ->
+            RunCreator(id = userId.toJavaUuid(), username = this[UsersTable.username])
+        },
     )
 }

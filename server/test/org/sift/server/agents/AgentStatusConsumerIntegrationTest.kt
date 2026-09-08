@@ -52,6 +52,7 @@ class AgentStatusConsumerIntegrationTest : RabbitMqIntegrationTest() {
         assertEquals(AgentPhase.RUNNING, run.phase)
         assertEquals("review-$uid", run.crName)
         assertNull(run.repositoryId)
+        assertNull(run.createdBy)
         assertEquals("https://example.org/ext.git", run.spec["repositoryUrl"].asString())
 
         publisher.publish(

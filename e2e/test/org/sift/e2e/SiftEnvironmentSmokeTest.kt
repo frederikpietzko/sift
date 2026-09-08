@@ -12,7 +12,8 @@ import kotlin.test.assertTrue
 
 /**
  * Boots the full stack through [SiftEnvironment] (operator + server as host JVMs) and checks the
- * server is reachable and the cluster is prepared. Skipped unless `SIFT_E2E=true`.
+ * server is reachable (anonymous probe and authenticated API) and the cluster is prepared. Skipped
+ * unless `SIFT_E2E=true`.
  */
 @EnabledIfEnvironmentVariable(named = "SIFT_E2E", matches = "true")
 @ExtendWith(SiftEnvironment::class)
@@ -25,6 +26,9 @@ class SiftEnvironmentSmokeTest(private val env: SiftEnvironment) {
             HttpResponse.BodyHandlers.ofString(),
         )
         assertEquals(200, response.statusCode(), response.body())
+
+        val repositories = env.api().get("/api/v1/repositories")
+        assertEquals(ServerApi.HTTP_OK, repositories.status, repositories.rawBody)
 
         val crd = env.kubernetesClient.apiextensions().v1().customResourceDefinitions()
             .withName(ClusterResources.CODE_REVIEW_CRD).get()

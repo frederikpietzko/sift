@@ -1,5 +1,9 @@
 # Non-secret runtime configuration of the Sift Server. Secrets (database/RabbitMQ passwords,
 # token encryption key) come from the `sift-server-secrets` Secret referenced in deployment.yaml.
+# The OAuth2 resource server needs no secret: the web client is a public PKCE client and tokens are
+# validated against the issuer's JWKS. Point SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI at
+# any OIDC provider (Keycloak, Entra, Auth0, ...); the default targets the Compose Keycloak reachable
+# from a kind cluster via host.docker.internal.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,3 +20,10 @@ data:
   SPRING_RABBITMQ_PORT: '5672'
   SPRING_RABBITMQ_USERNAME: sift
   SPRING_RABBITMQ_VIRTUAL_HOST: /
+  # Issuer whose tokens are accepted; the JWKS is discovered from it.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://host.docker.internal:8180/realms/sift
+  # Required `aud` claim; set to an empty string to disable the audience check.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES: sift-server
+  # Public client id the web client uses for authorization code + PKCE (exposed via GET /api/v1/auth/config).
+  SIFT_SERVER_AUTH_CLIENT_ID: sift-web
+  SIFT_SERVER_AUTH_SCOPES: openid,profile,email

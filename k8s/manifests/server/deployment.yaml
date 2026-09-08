@@ -7,7 +7,9 @@
 #     --from-literal=rabbitmq-password="$RABBITMQ_PASSWORD" \
 #     --from-literal=encryption-key="$(openssl rand -base64 32)"
 #
-# The Secret is intentionally not part of these manifests.
+# The Secret is intentionally not part of these manifests. Authentication needs no additional Secret:
+# the server is an OAuth2 resource server configured entirely through the ConfigMap
+# (SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI, ..._JWT_AUDIENCES, SIFT_SERVER_AUTH_CLIENT_ID).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

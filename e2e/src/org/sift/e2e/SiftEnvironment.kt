@@ -26,6 +26,16 @@ class SiftEnvironment : BeforeAllCallback, ParameterResolver {
     val kubernetesClient: KubernetesClient get() = stack.client
     val jdbcUrl: String get() = Compose.POSTGRES_JDBC_URL
     val preflight: PreflightReport get() = stack.preflight
+    val issuerUri: String get() = Compose.KEYCLOAK_ISSUER
+
+    /** A fresh Keycloak access token for the `e2e` user; cached and renewed shortly before expiry. */
+    fun accessToken(): String = stack.accessToken()
+
+    /** Server API client authenticated as the `e2e` user (token refreshed per request when needed). */
+    fun api(): ServerApi = ServerApi(serverBaseUrl, ::accessToken)
+
+    /** Server API client that sends no bearer token. */
+    fun anonymousApi(): ServerApi = ServerApi(serverBaseUrl)
 
     override fun beforeAll(context: ExtensionContext) {
         stack = context.root.getStore(NAMESPACE)
@@ -46,6 +56,19 @@ class SiftEnvironment : BeforeAllCallback, ParameterResolver {
         private val processes = ArrayDeque<HostProcess>()
         private val operatorConfig get() = RepoRoot.dir.resolve("k8s/local/operator.yaml")
         val serverBaseUrl: String = "http://127.0.0.1:${preflight.serverPort}"
+        private var token: AccessToken? = null
+
+        @Synchronized
+        fun accessToken(): String {
+            val current = token?.takeIf { it.isFresh() }
+                ?: KeycloakTokens.passwordGrant(
+                    issuer = Compose.KEYCLOAK_ISSUER,
+                    clientId = Compose.KEYCLOAK_CLIENT_ID,
+                    username = Compose.E2E_USER,
+                    password = Compose.E2E_PASSWORD,
+                ).also { token = it }
+            return current.value
+        }
 
         private fun startOperator() {
             val env = mapOf(
@@ -66,6 +89,9 @@ class SiftEnvironment : BeforeAllCallback, ParameterResolver {
                 "SIFT_SERVER_ENCRYPTION_KEY" to randomEncryptionKey(),
                 "SERVER_PORT" to preflight.serverPort.toString(),
                 "SERVER_ADDRESS" to "127.0.0.1",
+                "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" to Compose.KEYCLOAK_ISSUER,
+                "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES" to Compose.KEYCLOAK_AUDIENCE,
+                "SIFT_SERVER_AUTH_CLIENT_ID" to Compose.KEYCLOAK_CLIENT_ID,
             )
             val server = HostProcess.start(name = "server", module = "server", env = env)
             processes.addFirst(server)

@@ -17,6 +17,7 @@ dependencies:
   - $spring.boot.starter.validation
   - $spring.boot.starter.actuator
   - $spring.boot.starter.amqp
+  - $spring.boot.starter.oauth2.resource.server
   - $libs.spring.boot.starter.flyway
   - $libs.flyway.database.postgresql
   - $libs.postgresql
@@ -33,6 +34,8 @@ dependencies:
 test-dependencies:
   - $spring.boot.starter.test
   - $libs.spring.boot.webmvc.test
+  - $libs.spring.boot.security.test
+  - $libs.spring.security.test
   - $libs.mockk
   - $libs.springmockk
   - $libs.spring.boot.testcontainers

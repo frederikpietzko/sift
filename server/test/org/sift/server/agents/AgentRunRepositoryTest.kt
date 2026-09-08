@@ -3,6 +3,8 @@ package org.sift.server.agents
 import org.sift.server.PostgresIntegrationTest
 import org.sift.server.repositories.Repository
 import org.sift.server.repositories.RepositoryRepository
+import org.sift.server.users.User
+import org.sift.server.users.UserRepository
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.annotation.Transactional
@@ -26,6 +28,9 @@ class AgentRunRepositoryTest : PostgresIntegrationTest() {
 
     @Autowired
     private lateinit var repositories: RepositoryRepository
+
+    @Autowired
+    private lateinit var users: UserRepository
 
     @Autowired
     private lateinit var jdbcTemplate: JdbcTemplate
@@ -168,6 +173,69 @@ class AgentRunRepositoryTest : PostgresIntegrationTest() {
         assertFailsWith<IllegalArgumentException> { runs.list(AgentRunFilter(), page = -1, size = 10) }
         assertFailsWith<IllegalArgumentException> { runs.list(AgentRunFilter(), page = 0, size = 0) }
     }
+
+    @Test
+    fun `created_by is persisted joined with the username and honoured by list and findUpdatedSince`() {
+        jdbcTemplate.update("delete from review_results")
+        jdbcTemplate.update("delete from agent_runs")
+        val alice = user("alice")
+        val bob = user("bob")
+        val repository = repository("echo")
+        val byAlice = runs.insert(
+            run(repository.id, AgentPhase.RUNNING, createdAt = now.minusHours(2))
+                .copy(createdBy = RunCreator(id = alice.id, username = "stale-name-is-ignored")),
+        )
+        val byBob = runs.insert(
+            run(repository.id, AgentPhase.RUNNING, createdAt = now.minusHours(1))
+                .copy(createdBy = RunCreator(id = bob.id, username = bob.username)),
+        )
+        val external = runs.insert(
+            run(repositoryId = null, phase = AgentPhase.PENDING, createdAt = now).copy(source = RunSource.EXTERNAL),
+        )
+
+        assertEquals(RunCreator(alice.id, "alice"), assertNotNull(runs.findById(byAlice.id)).createdBy)
+        assertEquals(RunCreator(bob.id, "bob"), assertNotNull(runs.findById(byBob.id)).createdBy)
+        assertNull(assertNotNull(runs.findById(external.id)).createdBy)
+
+        val all = runs.list(AgentRunFilter(), page = 0, size = 10)
+        assertEquals(listOf(external.id, byBob.id, byAlice.id), all.items.map { it.id })
+        assertEquals(3L, all.total)
+
+        val alicesRuns = runs.list(AgentRunFilter(createdBy = alice.id), page = 0, size = 10)
+        assertEquals(listOf(byAlice.id), alicesRuns.items.map { it.id })
+        assertEquals(1L, alicesRuns.total)
+        assertTrue(runs.list(AgentRunFilter(createdBy = UUID.randomUUID()), page = 0, size = 10).items.isEmpty())
+
+        val since = now.minusHours(3)
+        assertEquals(
+            listOf(byBob.id),
+            runs.findUpdatedSince(since, AgentRunFilter(createdBy = bob.id), limit = 10).map { it.id },
+        )
+        assertEquals(
+            listOf(byAlice.id, byBob.id, external.id),
+            runs.findUpdatedSince(since, AgentRunFilter(), limit = 10).map { it.id },
+        )
+
+        // unknown creator ids are rejected by the foreign key
+        assertFailsWith<Exception> {
+            runs.insert(
+                run(repository.id, AgentPhase.CREATED, createdAt = now)
+                    .copy(createdBy = RunCreator(id = UUID.randomUUID(), username = "ghost")),
+            )
+        }
+    }
+
+    private fun user(username: String): User = users.upsert(
+        User(
+            id = UUID.randomUUID(),
+            issuer = "https://issuer.test/realms/repo-test",
+            subject = "sub-$username",
+            username = username,
+            email = null,
+            createdAt = now,
+            lastSeenAt = now,
+        ),
+    )
 
     private fun run(repositoryId: UUID?, phase: AgentPhase, createdAt: OffsetDateTime): AgentRun {
         val id = UUID.randomUUID()

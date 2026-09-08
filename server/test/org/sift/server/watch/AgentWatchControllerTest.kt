@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.sift.server.agents.AgentKind
 import org.sift.server.agents.AgentPhase
 import org.sift.server.agents.AgentRun
@@ -19,8 +20,10 @@ import org.sift.server.agents.AgentRunFilter
 import org.sift.server.agents.AgentRunRepository
 import org.sift.server.agents.AgentRunResponse
 import org.sift.server.agents.Page
+import org.sift.server.agents.RunCreator
 import org.sift.server.agents.RunSource
 import org.sift.server.config.ServerProperties
+import org.sift.server.users.TestUsers
 import org.sift.server.watch.AgentWatchController.Companion.toResumePoint
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.transaction.support.TransactionOperations
@@ -32,6 +35,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -53,7 +57,7 @@ class AgentWatchControllerTest {
             Page(items = listOf(second, first), page = 0, size = AgentRunWatchService.SNAPSHOT_LIMIT, total = 2)
         val updated = first.copy(phase = AgentPhase.RUNNING, updatedAt = OffsetDateTime.parse("2026-09-07T10:06:00Z"))
 
-        val frames = collectData(controller().watch(agentId = null, kind = null, lastEventId = null), count = 3) {
+        val frames = collectData(controller().watch(), count = 3) {
             events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(updated)))
         }
 
@@ -69,7 +73,7 @@ class AgentWatchControllerTest {
         val other = second.copy(phase = AgentPhase.FAILED)
         val mine = first.copy(phase = AgentPhase.SUCCESS)
 
-        val frames = collectData(controller().watch(agentId = first.id, kind = null, lastEventId = null), count = 2) {
+        val frames = collectData(controller().watch(agentId = first.id), count = 2) {
             events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(other)))
             events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(mine)))
         }
@@ -93,7 +97,7 @@ class AgentWatchControllerTest {
 
         val controller = controller()
         val frames = collectData(
-            controller.watch(agentId = null, kind = AgentKind.CODE_REVIEW, lastEventId = since.toEpochMilli().toString()),
+            controller.watch(kind = AgentKind.CODE_REVIEW, lastEventId = since.toEpochMilli().toString()),
             count = 2,
         ) {
             events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(first)))
@@ -110,12 +114,47 @@ class AgentWatchControllerTest {
 
         val heartbeat = withTimeout(TIMEOUT_MILLIS) {
             controller(heartbeat = Duration.ofMillis(HEARTBEAT_MILLIS))
-                .watch(agentId = null, kind = null, lastEventId = null)
+                .watch()
                 .first { it.comment() != null }
         }
 
         assertEquals(AgentWatchController.HEARTBEAT, heartbeat.comment())
         assertNull(heartbeat.data())
+    }
+
+    @Test
+    fun `mine restricts the snapshot and live events to the caller's runs`() = runBlocking {
+        val mine = first.copy(createdBy = RunCreator(TestUsers.ALICE_ID, TestUsers.alice.username))
+        val theirs = second.copy(createdBy = RunCreator(UUID.randomUUID(), "bob"))
+        val limit = AgentRunWatchService.SNAPSHOT_LIMIT
+        every { runs.list(AgentRunFilter(createdBy = TestUsers.ALICE_ID), 0, limit) } returns
+            Page(items = listOf(mine), page = 0, size = limit, total = 1)
+
+        val frames = collectData(controller().watch(mine = true), count = 2) {
+            events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(theirs)))
+            events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(second)))
+            val updated = mine.copy(phase = AgentPhase.RUNNING)
+            events.emit(AgentRunEvent(AgentRunEventType.UPDATED, AgentRunResponse.from(updated)))
+        }
+
+        assertEquals(listOf("SNAPSHOT", "UPDATED"), frames.map { it.event() })
+        assertEquals(listOf(mine.id, mine.id), frames.map { assertNotNull(it.data()).run.id })
+        assertEquals(TestUsers.ALICE_ID, assertNotNull(frames.last().data()).run.createdBy?.id)
+    }
+
+    @Test
+    fun `createdBy filters a single agent snapshot and contradicting mine is rejected`(): Unit = runBlocking {
+        val other = UUID.randomUUID()
+        every { runs.findById(first.id) } returns first.copy(createdBy = RunCreator(other, "bob"))
+
+        val frames = collectData(controller().watch(agentId = first.id, createdBy = other), count = 1) {}
+        assertEquals(listOf("SNAPSHOT"), frames.map { it.event() })
+
+        // the run belongs to somebody else, so `mine=true` yields no snapshot frame for it
+        val filtered = controller().watch(agentId = first.id, mine = true).filter { it.data() != null }
+        assertNull(withTimeoutOrNull(HEARTBEAT_MILLIS * 4) { filtered.first() })
+
+        assertFailsWith<IllegalArgumentException> { controller().watch(mine = true, createdBy = other) }
     }
 
     @Test
@@ -127,7 +166,26 @@ class AgentWatchControllerTest {
 
     private fun controller(heartbeat: Duration = Duration.ofHours(1)): AgentWatchController = AgentWatchController(
         service,
-        ServerProperties(encryptionKey = "test", watch = ServerProperties.Watch(heartbeat = heartbeat)),
+        ServerProperties(
+            encryptionKey = "test",
+            watch = ServerProperties.Watch(heartbeat = heartbeat),
+            auth = ServerProperties.Auth(clientId = "sift-web"),
+        ),
+    )
+
+    private fun AgentWatchController.watch(
+        agentId: UUID? = null,
+        kind: AgentKind? = null,
+        mine: Boolean = false,
+        createdBy: UUID? = null,
+        lastEventId: String? = null,
+    ): Flow<ServerSentEvent<AgentRunEvent>> = watch(
+        agentId = agentId,
+        kind = kind,
+        mine = mine,
+        createdBy = createdBy,
+        lastEventId = lastEventId,
+        user = TestUsers.alice,
     )
 
     /** Collects [count] data frames; [afterSnapshot] runs once the first snapshot frame arrived. */

@@ -30,6 +30,7 @@ class RepositoryServiceTest {
         ServerProperties(
             encryptionKey = ByteArray(KEY_BYTES).also(SecureRandom()::nextBytes)
                 .let(Base64.getEncoder()::encodeToString),
+            auth = ServerProperties.Auth(clientId = "sift-web"),
         ),
     )
     private val clock = Clock.fixed(Instant.parse("2026-09-07T10:00:00Z"), ZoneOffset.UTC)

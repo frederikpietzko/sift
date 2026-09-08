@@ -59,7 +59,8 @@ class TokenCipherTest {
         assertTrue(invalid.message.orEmpty().contains("SIFT_SERVER_ENCRYPTION_KEY"), invalid.message)
     }
 
-    private fun properties(key: String) = ServerProperties(encryptionKey = key)
+    private fun properties(key: String) =
+        ServerProperties(encryptionKey = key, auth = ServerProperties.Auth(clientId = "sift-web"))
 
     private fun randomKey(bytes: Int): String =
         ByteArray(bytes).also(SecureRandom()::nextBytes).let(Base64.getEncoder()::encodeToString)

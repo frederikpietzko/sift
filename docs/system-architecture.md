@@ -8,7 +8,7 @@ Sift is an Open Source Agentic Code Review Platform designed for self-hosting an
 
 - **Clients** (Sift VSCode, Sift IJ Plugin, Sift Web UI, and possibly a Coding Agent) let users manage reviews and see results. They talk to the **Sift Server** (partly via **MCP**).
 - The **Sift Server** persists agent sessions and results in **Postgres** and applies Custom Resources (CRs) via the **k8s API**.
-  - The [server](system-components/server.md) (`server`, Spring Boot 4 + Exposed + fabric8) exposes REST under `/api/v1/repositories`, `/api/v1/agents` and `/api/v1/results` plus the SSE stream `GET /api/v1/agents/watch`. It creates and foreground-deletes `CodeReview` CRs for agent runs, encrypts repository access tokens at rest and mirrors them into per-repository k8s Secrets that the CR references ([ADR 0012](adrs/0012-server-managed-repository-credentials.md)). Its Postgres read model (`agent_runs`, `review_results`, `review_findings`) is fed exclusively by the `code-review.status` ([ADR 0011](adrs/0011-operator-status-events-via-rabbitmq.md)) and `code-review.completed` queues; a trigger on `agent_runs` emits `pg_notify('sift_agent_runs')`, which the server turns into SSE `UPDATED` frames ([ADR 0013](adrs/0013-agent-run-watch-via-pg-notify.md)). The API has no authentication in this iteration and relies on the ingress/network boundary ([ADR 0014](adrs/0014-defer-server-api-authentication.md)). Deployment manifests (ConfigMap, Deployment, Service, RBAC) live in `k8s/manifests/server/`.
+  - The [server](system-components/server.md) (`server`, Spring Boot 4 + Exposed + fabric8) exposes REST under `/api/v1/repositories`, `/api/v1/agents` and `/api/v1/results` plus the SSE stream `GET /api/v1/agents/watch`. It creates and foreground-deletes `CodeReview` CRs for agent runs, encrypts repository access tokens at rest and mirrors them into per-repository k8s Secrets that the CR references ([ADR 0012](adrs/0012-server-managed-repository-credentials.md)). Its Postgres read model (`agent_runs`, `review_results`, `review_findings`) is fed exclusively by the `code-review.status` ([ADR 0011](adrs/0011-operator-status-events-via-rabbitmq.md)) and `code-review.completed` queues; a trigger on `agent_runs` emits `pg_notify('sift_agent_runs')`, which the server turns into SSE `UPDATED` frames ([ADR 0013](adrs/0013-agent-run-watch-via-pg-notify.md)). The API is an **OAuth2 resource server**: clients authenticate at the organisation's **OIDC identity provider** (Keycloak, Entra ID, Auth0, …) with the authorization-code + PKCE flow and send JWT bearer tokens; the server validates them against the issuer's JWKS, upserts the caller into `users`, attributes every run to its creator (`createdBy`, `?mine=true`) and exposes the provider settings anonymously at `GET /api/v1/auth/config` ([ADR 0016](adrs/0016-oauth2-resource-server-and-user-attribution.md), superseding [ADR 0014](adrs/0014-defer-server-api-authentication.md)). Deployment manifests (ConfigMap, Deployment, Service, RBAC) live in `k8s/manifests/server/`.
 - The **Sift Operator** watches the k8s API and schedules, monitors & updates jobs — spawning **reviewer** and **security scanner** agent jobs.
   - `k8s/operator` uses the Java Operator SDK Spring starter and explicitly invokes a ConfigMap-before-Job workflow for manually applied CRs, without a server API or webhook. Owned execution snapshots are create-only, with a trusted configured image and read-only Spring configuration validated against packaged startup ([ADR 0007](adrs/0007-immutable-review-provisioning.md)). Generation changes cancel old Jobs, wait for their Pods, and coalesce to the latest execution; version-guarded status and terminal identities prevent stale updates and silent replay ([ADR 0008](adrs/0008-generation-safe-review-lifecycle.md)). The [CodeReview contract](system-components/code-review-operator.md) defines base branch/SHA, generation identity and the external agent/event handoff ([ADR 0006](adrs/0006-code-review-execution-contract.md)); image publication and the final SHA/event-correlated E2E gate remain separate deliverables.
 - Agents publish their results to **RabbitMQ** (see [ADR 0001](adrs/0001-use-rabbitmq-as-message-queue.md)); the Sift Server consumes results and status updates from it.
@@ -19,9 +19,9 @@ Sift is an Open Source Agentic Code Review Platform designed for self-hosting an
   - Code review explicitly installs the shared `ToolAllowlistAdvisor` to check shell commands before execution. Shell execution defaults to denied until exact commands are configured, with denials returned as tool feedback. Non-shell tools pass through unrestricted by the advisor. This is not a filesystem or network sandbox (see [ADR 0005](adrs/0005-enforce-agent-tool-allowlists.md) and [shell command allowlist advisor](system-components/tool-allowlist-advisor.md)).
   - The code-review agent explicitly closes its Spring context after its one-shot runner completes, releasing RabbitMQ resources so the job can exit (see [ADR 0004](adrs/0004-close-one-shot-agent-context.md)).
   - The [review image workflow](system-components/code-review-image.md) packages a secret-free source context into a digest-pinned, nonroot runtime with native Git and permitted tooling ([ADR 0010](adrs/0010-review-image-packaging.md)). An arm64 candidate is published and runtime-validated; [acceptance evidence](validation/code-review-image-2026-09-06.md) explicitly records the missing external SHA/event contract and unresolved dependency findings, not a successful review gate.
-  - For local development, RabbitMQ, Postgres, and SearXNG run via [docker-compose](../compose.yaml).
+  - For local development, RabbitMQ, Postgres, SearXNG and a Keycloak with the imported `sift` realm (dev user `dev`/`dev`) run via [docker-compose](../compose.yaml); Keycloak stands in for the organisation's identity provider.
   - The [kind development workflow](system-components/local-kind-development.md) runs the operator with the supplied host kubeconfig and bridges review Pods to JB Central, Compose SearXNG, and RabbitMQ through fixed-upstream ClusterIP Services. Separate namespace-scoped operator RBAC is verified without claiming it restricts the host identity; credentials use administrator-provisioned Secrets ([ADR 0009](adrs/0009-local-kind-connectivity.md)).
-  - The [end-to-end tests](system-components/e2e-tests.md) (`e2e` module, gated behind `SIFT_E2E=true`) run the whole platform for real — a dedicated `sift-e2e` kind cluster, Compose Postgres/RabbitMQ, operator and server as host JVMs, the published review image — and drive one happy path through the server API to `SUCCESS`, asserting only on stable contracts ([ADR 0015](adrs/0015-e2e-harness-dedicated-kind-cluster.md)).
+  - The [end-to-end tests](system-components/e2e-tests.md) (`e2e` module, gated behind `SIFT_E2E=true`) run the whole platform for real — a dedicated `sift-e2e` kind cluster, Compose Postgres/RabbitMQ/Keycloak, operator and server as host JVMs, the published review image — and drive one happy path through the server API to `SUCCESS` with real Keycloak tokens, asserting only on stable contracts ([ADR 0015](adrs/0015-e2e-harness-dedicated-kind-cluster.md)).
 - The **VCS Adapter** integrates with **GitHub**, **GitLab**, and **CodeBerg**: it gets PRs & responses, posts comments, and publishes events (PR created, comment on PR thread) to the MQ.
 
 ## Mermaid Diagram
@@ -36,9 +36,12 @@ graph TB
     end
 
     user(("User<br/>Manage Reviews & see results"))
+    idp["OIDC Identity Provider<br/>Keycloak, Entra, Auth0, ..."]
     user -.-> vscode
     user --> ij
     user --> webui
+    webui -->|auth code + PKCE| idp
+    ij -->|auth code + PKCE| idp
 
     subgraph k8s [k8s]
         postgres[("Postgres<br/>Agent Sessions, Results etc")]
@@ -56,11 +59,12 @@ graph TB
     gitlab["GitLab"]
     codeberg["CodeBerg"]
 
-    vscode <--> server
-    ij <--> server
-    webui <--> server
+    vscode <-->|Bearer JWT| server
+    ij <-->|Bearer JWT| server
+    webui <-->|Bearer JWT| server
     coding -->|request review???| mcp
     mcp --- server
+    server -->|JWKS| idp
 
     server --> postgres
     postgres -->|NOTIFY agent_runs| server
@@ -91,8 +95,9 @@ graph TB
 |---|---|
 | Sift VSCode / IJ Plugin / Web UI | Client frontends to manage reviews and see results |
 | Coding Agent (???) | Potential future client requesting reviews (via MCP) |
-| Sift Server | Central service; REST `/api/v1/{repositories,agents,results}` + SSE `/api/v1/agents/watch`, creates/deletes `CodeReview` CRs, syncs repository token Secrets, projects `code-review.status`/`code-review.completed` events into Postgres; no auth yet ([server](system-components/server.md), ADRs [0011](adrs/0011-operator-status-events-via-rabbitmq.md)–[0014](adrs/0014-defer-server-api-authentication.md)) |
-| Postgres | Server-owned schema (Flyway): `repositories` (encrypted tokens), `agent_runs`, `review_results`, `review_findings`; `NOTIFY sift_agent_runs` drives the SSE watch |
+| Sift Server | Central service; OAuth2 resource server (JWT bearer tokens from any OIDC issuer, anonymous `GET /api/v1/auth/config` for PKCE discovery, `GET /api/v1/me`), REST `/api/v1/{repositories,agents,results}` + SSE `/api/v1/agents/watch` with `mine`/`createdBy` filters, creates/deletes `CodeReview` CRs attributed to the caller, syncs repository token Secrets, projects `code-review.status`/`code-review.completed` events into Postgres ([server](system-components/server.md), ADRs [0011](adrs/0011-operator-status-events-via-rabbitmq.md)–[0013](adrs/0013-agent-run-watch-via-pg-notify.md), [0016](adrs/0016-oauth2-resource-server-and-user-attribution.md)) |
+| OIDC Identity Provider | External, organisation-owned (Keycloak, Entra ID, Auth0, …); clients log in there with authorization code + PKCE as the public client `sift-web`, the server only validates tokens via the issuer's JWKS. Locally a Compose Keycloak with the `sift` realm ([ADR 0016](adrs/0016-oauth2-resource-server-and-user-attribution.md)) |
+| Postgres | Server-owned schema (Flyway): `users` (provisioned from tokens), `repositories` (encrypted tokens), `agent_runs` (with `created_by`), `review_results`, `review_findings`; `NOTIFY sift_agent_runs` drives the SSE watch |
 | k8s API | Kubernetes API server; receives CRs from Sift Server, watched by the operator |
 | Sift Operator | Watches CRs; schedules, monitors & updates agent jobs |
 | reviewer | Code review agent job; publishes results to the MQ (see [code-review-agent](system-components/code-review-agent.md)) |

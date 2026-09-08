@@ -12,16 +12,22 @@ repositories API with encrypted tokens and k8s Secret mirroring is implemented (
 (Step 4), the SSE run watch backed by Postgres `LISTEN/NOTIFY` is implemented (Step 5,
 [ADR 0013](../adrs/0013-agent-run-watch-via-pg-notify.md)), the `code-review.completed` consumer with the
 review results query API is in place (Step 6) and the Kubernetes manifests plus architecture documentation
-are finished (Step 7). The API is unauthenticated by decision
-([ADR 0014](../adrs/0014-defer-server-api-authentication.md)); see [Out of scope](#out-of-scope).
+are finished (Step 7). The API is an **OAuth2 resource server**: every `/api/**` call needs a JWT bearer token
+from the configured OIDC provider, callers are provisioned into `users` and runs are attributed to them
+([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md), superseding
+[ADR 0014](../adrs/0014-defer-server-api-authentication.md)); see [Security](#security).
 
 ## API summary
 
 All endpoints are JSON (`application/json`) unless noted; errors are RFC 7807 `application/problem+json`
-produced by `ApiExceptionHandler`. There is no authentication ([ADR 0014](../adrs/0014-defer-server-api-authentication.md)).
+produced by `ApiExceptionHandler` (domain errors) or the security handlers (`401`/`403`). Every `/api/**`
+endpoint except `GET /api/v1/auth/config` requires `Authorization: Bearer <JWT>` and answers `401` otherwise
+(see [Security](#security)); the `Errors` column below lists the endpoint-specific codes only.
 
 | Method | Path | Success | Errors | Section |
 |---|---|---|---|---|
+| `GET` | `/api/v1/auth/config` (anonymous) | `200` | — | [Security](#security) |
+| `GET` | `/api/v1/me` | `200` | — | [Security](#security) |
 | `POST` | `/api/v1/repositories` | `201` | `400`, `409` | [Repositories](#repositories-api) |
 | `GET` | `/api/v1/repositories` | `200` | — | [Repositories](#repositories-api) |
 | `GET` | `/api/v1/repositories/{id}` | `200` | `400`, `404` | [Repositories](#repositories-api) |
@@ -35,12 +41,13 @@ produced by `ApiExceptionHandler`. There is no authentication ([ADR 0014](../adr
 | `GET` | `/api/v1/results` | `200` | `400` | [Results](#review-results-api) |
 | `GET` | `/api/v1/results/{id}` | `200` | `400`, `404` | [Results](#review-results-api) |
 | `GET` | `/api/v1/results/{id}/findings` | `200` | `400`, `404` | [Results](#review-results-api) |
-| `GET` | `/actuator/health`, `/actuator/health/{liveness,readiness}`, `/actuator/info` | `200`/`503` | — | Actuator |
+| `GET` | `/actuator/health`, `/actuator/health/{liveness,readiness}`, `/actuator/info` (anonymous) | `200`/`503` | — | Actuator |
 
 Ingress: REST from clients; AMQP consumers on `sift.server.code-review.status` and
 `sift.server.code-review.completed` (see [Queues](#queues-and-dead-lettering)). Egress: Postgres (Hikari
 pool + one `LISTEN` connection), RabbitMQ, the Kubernetes API (`CodeReview` CRs and `sift-repo-*` Secrets in
-`sift.server.namespace`).
+`sift.server.namespace`), the OIDC provider (OpenID configuration + JWKS of `issuer-uri`, fetched lazily on the
+first token and cached).
 
 ## Module layout
 
@@ -48,21 +55,29 @@ pool + one `LISTEN` connection), RabbitMQ, the Kubernetes API (`CodeReview` CRs 
 |---|---|
 | `server/module.yaml` | `jvm/app`, applies the shared detekt and Spring templates, `runtimeClasspathMode: jars`. |
 | `src/org/sift/server/Main.kt`, `Application.kt` | Entry point. Imports `ExposedAutoConfiguration`, excludes `DataSourceTransactionManagerAutoConfiguration` so Exposed's `SpringTransactionManager` is the only transaction manager. |
-| `src/org/sift/server/config/ServerProperties.kt` | `@ConfigurationProperties("sift.server")`, validated; nested `Watch { enabled, heartbeat }`. |
+| `src/org/sift/server/config/ServerProperties.kt` | `@ConfigurationProperties("sift.server")`, validated; nested `Watch { enabled, heartbeat }` and `Auth { clientId, scopes, claims { username, email } }`. |
 | `src/org/sift/server/config/ApplicationCoroutineScope.kt` | The application `CoroutineScope` bean (`SupervisorJob + Dispatchers.IO + CoroutineName`), cancelled on context close. |
 | `src/org/sift/server/config/KubernetesConfiguration.kt` | Default `KubernetesClient` bean (`KubernetesClientBuilder().build()`, backs off if one is already defined). |
 | `src/org/sift/server/config/MessagingConfiguration.kt` | `ServerQueues` constants and the `Declarables` bean with the server's consumer queues, DLX and bindings. |
 | `src/org/sift/server/api/` | `ApiExceptionHandler` (`@RestControllerAdvice`, RFC 7807 `ProblemDetail`), `NotFoundException` (404), `ConflictException` (409). |
+| `src/org/sift/server/security/SecurityConfiguration.kt` | The `SecurityFilterChain`: stateless, CSRF off, `oauth2ResourceServer.jwt`, permit list `ANONYMOUS_GET_PATHS` (`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/api/v1/auth/config`), everything else `authenticated`; registers `UserProvisioningFilter` after `BearerTokenAuthenticationFilter`. |
+| `src/org/sift/server/security/ProblemDetailAuthHandlers.kt` | `ProblemDetailAuthenticationEntryPoint` (delegates to `BearerTokenAuthenticationEntryPoint` for `WWW-Authenticate`, then writes a `401` problem) and `ProblemDetailAccessDeniedHandler` (`403` problem). |
+| `src/org/sift/server/security/UserProvisioningFilter.kt` | `OncePerRequestFilter`: for a `JwtAuthenticationToken` calls `UserService.provision(jwt)` and stores the `User` as request attribute. |
+| `src/org/sift/server/security/CurrentUser.kt` | `@CurrentUser` parameter annotation, `CurrentUserArgumentResolver` and the `WebMvcConfigurer` registering it. |
+| `src/org/sift/server/security/AuthConfigController.kt` | Anonymous `GET /api/v1/auth/config` → `AuthConfigResponse { issuerUri, clientId, scopes }`. |
+| `src/org/sift/server/users/UsersTable.kt`, `User.kt` | Exposed DSL table for `users` and the domain model. |
+| `src/org/sift/server/users/UserRepository.kt`, `UserService.kt` | Blocking Exposed `upsert` on `(issuer, subject)` / `findById` / `findByIdentity`; `@Transactional provision(jwt)` mapping the configured claims (username falls back to `sub`), `get(id)`. |
+| `src/org/sift/server/users/MeController.kt`, `UserResponse.kt` | `GET /api/v1/me` → `UserResponse { id, subject, issuer, username, email }`. |
 | `src/org/sift/server/repositories/RepositoriesTable.kt` | Exposed DSL table for `repositories`. |
 | `src/org/sift/server/repositories/Repository.kt`, `RepositoryRepository.kt` | Domain model (`Repository`, `EncryptedToken`) and blocking Exposed DSL repository (insert/update/find/delete/`hasActiveRuns`). |
 | `src/org/sift/server/repositories/TokenCipher.kt` | AES-256-GCM encryption of tokens at rest, keyed by `SIFT_SERVER_ENCRYPTION_KEY`. |
 | `src/org/sift/server/repositories/RepositorySecretSync.kt` | Server-side-applies/deletes the per-repository k8s Secret. |
 | `src/org/sift/server/repositories/RepositoryService.kt` | `@Transactional` use cases, URL validation, `SecretRef` lookup for the CR builder. |
 | `src/org/sift/server/repositories/RepositoryController.kt`, `RepositoryDtos.kt` | `/api/v1/repositories` REST endpoints and request/response DTOs. |
-| `src/org/sift/server/agents/AgentRunsTable.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3). |
-| `src/org/sift/server/agents/AgentRun.kt`, `AgentRunRepository.kt` | Domain model (`AgentRun`, `AgentKind`, `AgentPhase`, `RunSource`, `AgentRunFilter`, `Page`) and blocking Exposed DSL repository (insert/update/updateStatus/findById/findByCrUid/findByExecutionId/list). |
+| `src/org/sift/server/agents/AgentRunsTable.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3, nullable `created_by` → `users.id`). |
+| `src/org/sift/server/agents/AgentRun.kt`, `AgentRunRepository.kt` | Domain model (`AgentRun`, `RunCreator`, `AgentKind`, `AgentPhase`, `RunSource`, `AgentRunFilter` incl. `resolveCreatedBy(mine, createdBy, user)`, `Page`) and blocking Exposed DSL repository (insert/update/updateStatus/findById/findByCrUid/findByExecutionId/list/findUpdatedSince; reads left-join `users` for the creator's username). |
 | `src/org/sift/server/agents/AgentKindAdapter.kt`, `CodeReviewAdapter.kt` | Per-kind bridge to the cluster; `CodeReviewAdapter` builds, creates and foreground-deletes `CodeReview` CRs. |
-| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: create (persist → apply CR → record uid), get, list, cancel, `applyStatus` upsert from events. |
+| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: `create(request, user)` (persist with `createdBy` → apply CR → record uid), get, list, cancel, `applyStatus` upsert from events (`EXTERNAL` runs keep `createdBy = null`). |
 | `src/org/sift/server/agents/AgentRunController.kt`, `AgentRunDtos.kt` | `/api/v1/agents` REST endpoints and request/response DTOs. |
 | `src/org/sift/server/agents/AgentStatusConsumer.kt` | `@RabbitListener` on `sift.server.code-review.status` feeding `AgentRunService.applyStatus`. |
 | `src/org/sift/server/watch/AgentRunEvent.kt`, `AgentRunEvents.kt` | SSE payload (`AgentRunEvent { type: SNAPSHOT/UPDATED, run }`) and the in-process `SharedFlow` fan-out (no replay, buffer 256, `DROP_OLDEST`). |
@@ -74,10 +89,11 @@ pool + one `LISTEN` connection), RabbitMQ, the Kubernetes API (`CodeReview` CRs 
 | `src/org/sift/server/results/ReviewResultConsumer.kt` | `@RabbitListener` on `sift.server.code-review.completed` feeding `ReviewResultService.store`. |
 | `src/org/sift/server/results/ReviewResultController.kt`, `ReviewResultDtos.kt` | `/api/v1/results` REST endpoints and response DTOs. |
 | `resources/application.yaml` | Default configuration, all secrets/hosts from environment variables. |
-| `resources/db/migration/` | Flyway migrations (`V1__init.sql`). |
-| `test/org/sift/server/` | `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/*Test` (cipher, Secret sync via fabric8 mock server, service with mockk, `@WebMvcTest` controller, repository against Postgres), `agents/*Test` (service with mockk, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller, repository against Postgres, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ), `results/*Test` (repository against Postgres incl. duplicate `execution_id`, service with mockk, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery), `watch/*Test` (`AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `WatchIntegrationTest` base with the listener enabled on a `RANDOM_PORT` server: `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`). |
+| `resources/db/migration/` | Flyway migrations (`V1__init.sql`, `V2__users.sql`). |
+| `test/org/sift/server/` | `security/TestSecurityConfiguration` (`@Primary JwtDecoder` decoding base64url JSON claim sets built by `TestTokens.bearer(...)`, plus the MockMvc post-processor `TestTokens.authenticated(...)` — no IdP is contacted, the real filter chain runs), `security/SecurityConfigurationTest` (401 problem + `WWW-Authenticate` without/with rejected token, anonymous probes and `/api/v1/auth/config`), `security/AuthConfigControllerTest`, `users/*Test` (`UserRepositoryTest` upsert semantics against Postgres, `UserServiceTest` claim mapping and `sub` fallback, `MeControllerTest`), `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled, test decoder imported), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create with bearer → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`; plus a `401` without token), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/*Test` (cipher, Secret sync via fabric8 mock server, service with mockk, `@WebMvcTest` controller, repository against Postgres), `agents/*Test` (service with mockk, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller incl. `mine`/`createdBy`, repository against Postgres incl. `created_by`, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ), `results/*Test` (repository against Postgres incl. duplicate `execution_id`, service with mockk, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery), `watch/*Test` (`AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `WatchIntegrationTest` base with the listener enabled on a `RANDOM_PORT` server: `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`). `@WebMvcTest` slices import `SecurityConfiguration` + `TestSecurityConfiguration` and mock `UserService`. |
 
-Stack: Spring Boot 4.1.1 (Web MVC, Validation, Actuator, AMQP, Flyway), Exposed 1.5.0
+Stack: Spring Boot 4.1.1 (Web MVC, Validation, Actuator, AMQP, Flyway, OAuth2 Resource Server / Spring Security 7;
+`spring-security-test` in tests), Exposed 1.5.0
 (`exposed-spring-boot4-starter`, `exposed-jdbc`, `exposed-json`, `exposed-java-time`), PostgreSQL
 driver, `kotlinx-coroutines-reactor` (Kotlin `Flow` → SSE in Spring MVC), fabric8 `kubernetes-client`, `//k8s/crds`,
 `//messaging`.
@@ -92,6 +108,12 @@ driver, `kotlinx-coroutines-reactor` (Kotlin `Flow` → SSE in Spring MVC), fabr
 | `spring.rabbitmq.host` / `port` | `SPRING_RABBITMQ_HOST` / `SPRING_RABBITMQ_PORT` | `localhost` / `5672` | |
 | `spring.rabbitmq.username` / `password` | `SPRING_RABBITMQ_USERNAME` / `SPRING_RABBITMQ_PASSWORD` | `sift` / `sift` | |
 | `spring.rabbitmq.virtual-host` | `SPRING_RABBITMQ_VIRTUAL_HOST` | `/` | |
+| `spring.security.oauth2.resourceserver.jwt.issuer-uri` | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` | `http://localhost:8180/realms/sift` | Issuer of accepted JWTs (any OIDC provider); OpenID configuration and JWKS are discovered from it, `iss` must match exactly. Default is the Compose Keycloak realm. |
+| `spring.security.oauth2.resourceserver.jwt.audiences` | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES` | `sift-server` | Comma-separated values the `aud` claim must contain (Boot's built-in validator). Set to an empty string to disable the audience check. |
+| `sift.server.auth.client-id` | `SIFT_SERVER_AUTH_CLIENT_ID` | `sift-web` | Public (PKCE) client id the web client authenticates as; only echoed through `GET /api/v1/auth/config`, not used for validation. Required (`@NotBlank`). |
+| `sift.server.auth.scopes` | `SIFT_SERVER_AUTH_SCOPES` | `openid,profile,email` | Scopes the web client should request; echoed through `/api/v1/auth/config`. |
+| `sift.server.auth.claims.username` | `SIFT_SERVER_AUTH_CLAIMS_USERNAME` | `preferred_username` | JWT claim read into `users.username`; falls back to `sub` when absent/blank. |
+| `sift.server.auth.claims.email` | `SIFT_SERVER_AUTH_CLAIMS_EMAIL` | `email` | JWT claim read into `users.email` (`null` when absent). |
 | `sift.server.namespace` | `SIFT_SERVER_NAMESPACE` | `sift-dev` | Namespace in which `CodeReview` CRs are applied; must be a DNS label. |
 | `sift.server.encryption-key` | `SIFT_SERVER_ENCRYPTION_KEY` | — (required) | Base64 AES-256 key (exactly 32 bytes once decoded) used to encrypt repository tokens at rest; startup fails with a message naming the variable otherwise. |
 | `sift.server.secret-prefix` | — | `sift-repo-` | Prefix of k8s Secrets created per repository (`<prefix><repository id>`). |
@@ -108,12 +130,13 @@ once and it is dead-lettered, see [Queues](#queues-and-dead-lettering)).
 
 ## Database schema
 
-Schema is owned by Flyway (`V1__init.sql`); Exposed never generates DDL.
+Schema is owned by Flyway (`V1__init.sql`, `V2__users.sql`); Exposed never generates DDL.
 
 | Table | Purpose |
 |---|---|
+| `users` | One row per authenticated identity, keyed by the unique `(issuer, subject)`; `username`, `email`, `created_at`, `last_seen_at` are refreshed from the token on every request (`V2__users.sql`). |
 | `repositories` | Registered repositories; `token_ciphertext`/`token_iv` hold the encrypted access token, `secret_name` the mirrored k8s Secret. |
-| `agent_runs` | One row per agent execution (`kind`, `source`, `phase`, `spec jsonb`, CR identity `cr_name`/`cr_uid`/`generation`, timestamps). Unique on `cr_uid`, indexed by `(phase, created_at desc)`. |
+| `agent_runs` | One row per agent execution (`kind`, `source`, `phase`, `spec jsonb`, CR identity `cr_name`/`cr_uid`/`generation`, timestamps, nullable `created_by` → `users.id`). Unique on `cr_uid`, indexed by `(phase, created_at desc)` and `(created_by, created_at desc)`. |
 | `review_results` | Result per `execution_id` (repository/branch/commit, summary), linked to its `agent_run`. Indexed by `(repository_url, commit_sha)`. |
 | `review_findings` | Findings per result (`file`, line range, `severity`, `category`, `message`, `suggestion`), cascade-deleted with the result. |
 
@@ -125,12 +148,25 @@ extra Postgres connection per replica for `LISTEN` (`application_name = sift-ser
 ## Running locally
 
 ```shell
-docker compose up -d postgres rabbitmq
+docker compose up -d --wait postgres rabbitmq keycloak
 SIFT_SERVER_ENCRYPTION_KEY=$(openssl rand -base64 32) ./kotlin run --module server
 ```
 
 Health: `GET http://localhost:8080/actuator/health` (liveness/readiness probes under
-`/actuator/health/liveness` and `/actuator/health/readiness`; `info` is exposed as well).
+`/actuator/health/liveness` and `/actuator/health/readiness`; `info` is exposed as well). These and
+`GET /api/v1/auth/config` need no token; everything else does. The defaults accept tokens from the Compose
+Keycloak realm `sift` (`http://localhost:8180/realms/sift`, admin console `http://localhost:8180`, `admin`/`admin`),
+which ships the dev user `dev`/`dev`. Obtain a token for manual calls with the password grant:
+
+```shell
+TOKEN=$(curl -s -d grant_type=password -d client_id=sift-web -d username=dev -d password=dev \
+  -d 'scope=openid profile email' http://localhost:8180/realms/sift/protocol/openid-connect/token | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/me
+```
+
+Access tokens of the dev realm live 5 minutes. Keycloak needs 10–40 s on a cold start; `--wait` blocks until
+its health check passes. The realm is imported with `IGNORE_EXISTING`, so after editing
+`config/keycloak/sift-realm.json` recreate the container (`docker compose rm -sf keycloak && docker compose up -d --wait keycloak`).
 
 Tests: `./kotlin test -m server` — `PostgresIntegrationTest` subclasses start a `postgres:17-alpine`
 Testcontainer (and `RabbitMqIntegrationTest` subclasses additionally a `rabbitmq:4-management-alpine` one);
@@ -148,9 +184,9 @@ manifests (`app.kubernetes.io/managed-by: sift-local-dev`):
 | File | Contents |
 |---|---|
 | `rbac.yaml` | ServiceAccount `sift-server`, Role (`get`/`list`/`create`/`delete` on `sift.org codereviews`; `get`/`create`/`patch`/`update`/`delete` on `secrets`) and RoleBinding. |
-| `configmap.yaml` | ConfigMap `sift-server` with the non-secret environment: `SIFT_SERVER_NAMESPACE=sift-dev`, `SPRING_DATASOURCE_URL` (`jdbc:postgresql://postgres:5432/sift`), `SPRING_DATASOURCE_USERNAME`, `SPRING_RABBITMQ_HOST/PORT/USERNAME/VIRTUAL_HOST` (`rabbitmq:5672`). Adjust the hosts to the Postgres/RabbitMQ Services of the target cluster. |
+| `configmap.yaml` | ConfigMap `sift-server` with the non-secret environment: `SIFT_SERVER_NAMESPACE=sift-dev`, `SPRING_DATASOURCE_URL` (`jdbc:postgresql://postgres:5432/sift`), `SPRING_DATASOURCE_USERNAME`, `SPRING_RABBITMQ_HOST/PORT/USERNAME/VIRTUAL_HOST` (`rabbitmq:5672`), `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` (`http://host.docker.internal:8180/realms/sift`, the Compose Keycloak as seen from a kind cluster), `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES=sift-server`, `SIFT_SERVER_AUTH_CLIENT_ID=sift-web`, `SIFT_SERVER_AUTH_SCOPES`. Adjust the hosts to the Postgres/RabbitMQ Services and the issuer/client id to the organisation's identity provider. Note that the token's `iss` must equal the configured issuer, so browser clients and the server must use the same issuer URL. |
 | `deployment.yaml` | Deployment `sift-server`, 1 replica (one `LISTEN` connection per replica; multi-replica fan-out is untested), `serviceAccountName: sift-server` with token automount, `envFrom` the ConfigMap, passwords/key from Secret `sift-server-secrets`, container port `8080`, startup/liveness probe `/actuator/health/liveness`, readiness `/actuator/health/readiness`, requests `250m`/`512Mi`, limits `1`/`1Gi`, nonroot (`10001`), `RuntimeDefault` seccomp, read-only root filesystem with an `emptyDir` on `/tmp`, all capabilities dropped. The image `jbfpietzko/sift-server:latest` is a placeholder until a server image is published. |
-| `service.yaml` | ClusterIP Service `sift-server`, port `8080` → `http`. No Ingress is shipped ([ADR 0014](../adrs/0014-defer-server-api-authentication.md)). |
+| `service.yaml` | ClusterIP Service `sift-server`, port `8080` → `http`. No Ingress is shipped; TLS termination in front of the server remains the operator's responsibility ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md)). |
 
 The Secret is created by the administrator and is not part of the repository:
 
@@ -161,7 +197,8 @@ kubectl --kubeconfig "$PWD/.kubeconfig" -n sift-dev create secret generic sift-s
   --from-literal=encryption-key="$(openssl rand -base64 32)"
 ```
 
-Keys map to `SPRING_DATASOURCE_PASSWORD`, `SPRING_RABBITMQ_PASSWORD` and `SIFT_SERVER_ENCRYPTION_KEY`. Losing
+Keys map to `SPRING_DATASOURCE_PASSWORD`, `SPRING_RABBITMQ_PASSWORD` and `SIFT_SERVER_ENCRYPTION_KEY`; authentication
+needs no Secret entry because the web client is a public PKCE client and the server holds no client secret. Losing
 or rotating `encryption-key` makes stored repository tokens undecryptable; they must then be re-entered via
 `PUT /api/v1/repositories/{id}`. Validate and apply:
 
@@ -178,8 +215,10 @@ database user must own the `sift` database.
 
 Not part of this iteration; each is a documented follow-up:
 
-- **Authentication/authorisation** — no Spring Security, anonymous API; rely on ingress/NetworkPolicy
-  ([ADR 0014](../adrs/0014-defer-server-api-authentication.md)).
+- **Authorisation model** — authentication is in place ([Security](#security)) but every authenticated user may
+  do everything; roles/permissions, creator-only cancel and quotas are a follow-up ADR
+  ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md) consequences). Opaque-token
+  introspection is not supported (JWTs only).
 - **Security-review agent kind** — `AgentKind` only has `CODE_REVIEW`; a second `AgentKindAdapter` and CRD
   are needed for the security scanner.
 - **VCS adapter** — no webhook ingestion (PR created / comment on thread) and no posting of findings back to
@@ -189,6 +228,54 @@ Not part of this iteration; each is a documented follow-up:
   ([ADR 0011](../adrs/0011-operator-status-events-via-rabbitmq.md) consequence).
 - **Server container image and publication**; the Deployment references a placeholder tag.
 - **Multi-replica SSE watch** validation and any UI.
+
+## Security
+
+The server is an OAuth2 **resource server** ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md)):
+it validates JWT bearer tokens issued by any OIDC provider and never performs a login itself. The web client
+runs the authorization-code + PKCE flow as a public client and sends the resulting access token; the server
+holds no client secret.
+
+| Aspect | Behaviour |
+|---|---|
+| Protected surface | Everything, including `/api/**`, except `GET /actuator/health`, `/actuator/health/**`, `/actuator/info` and `GET /api/v1/auth/config` (`SecurityConfiguration.ANONYMOUS_GET_PATHS`). |
+| Token validation | `spring-boot-starter-oauth2-resource-server`: signature via the JWKS discovered from `issuer-uri`, `iss` equality, `exp`/`nbf`, and — when `audiences` is non-empty — that `aud` contains one of the configured values. No custom validators. |
+| Missing/invalid token | `401` with `WWW-Authenticate: Bearer` (plus RFC 6750 `error`/`error_description` for malformed or rejected tokens) and an `application/problem+json` body `{type, title: "Unauthorized", status: 401, detail, instance}` written by `ProblemDetailAuthenticationEntryPoint`. Expired, forged, wrong-issuer and wrong-audience tokens are all `401`. |
+| Access denied | `403` problem from `ProblemDetailAccessDeniedHandler` (not reachable today because authorization is flat). |
+| Session/CSRF | Stateless (`SessionCreationPolicy.STATELESS`), CSRF disabled — there is no cookie to protect. |
+| Authorization | Flat: any authenticated user may use every endpoint. |
+| User provisioning | `UserProvisioningFilter` (after `BearerTokenAuthenticationFilter`) calls `UserService.provision(jwt)` on every authenticated request: `INSERT … ON CONFLICT (issuer, subject) DO UPDATE SET username, email, last_seen_at`. The row is exposed to controllers via `@CurrentUser user: User`. |
+| Claims | `users.username` ← `sift.server.auth.claims.username` (default `preferred_username`, fallback `sub`); `users.email` ← `sift.server.auth.claims.email` (default `email`, may be `null`). |
+| Logging | Tokens are never logged or echoed; `AuthConfigResponse` contains no secret. |
+
+### `GET /api/v1/auth/config` (anonymous)
+
+Discovery for the SPA's PKCE setup, taken from configuration only:
+
+```json
+{ "issuerUri": "http://localhost:8180/realms/sift", "clientId": "sift-web", "scopes": ["openid", "profile", "email"] }
+```
+
+The client fetches the provider's OpenID configuration from `issuerUri`, starts the authorization-code flow
+with `clientId` and `scopes`, and sends the access token as `Authorization: Bearer …` on every API call,
+including the SSE watch (a native `EventSource` cannot set headers; use a fetch-based SSE client).
+
+### `GET /api/v1/me`
+
+Returns the caller as provisioned from the current token:
+`UserResponse { id, subject, issuer, username, email }`. `id` is the server-side UUID used in
+`AgentRunResponse.createdBy.id` and the `createdBy` query parameter.
+
+### Identity providers
+
+Only the issuer, the client id and (optionally) the audience differ between providers. For the Compose
+Keycloak (`config/keycloak/sift-realm.json`) the realm `sift` contains the public client `sift-web`
+(standard flow, PKCE `S256`, redirect URIs `http://localhost:*` / `http://127.0.0.1:*`, web origins `+`, direct
+access grants enabled for the e2e harness) with an audience mapper adding `aud=sift-server`, and the users
+`dev`/`dev` and `e2e`/`e2e`. For another provider create an equivalent public client, make sure the access
+token carries the configured audience (or set `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_AUDIENCES` to an empty
+string) and adjust `SIFT_SERVER_AUTH_CLAIMS_USERNAME`/`_EMAIL` if its claims differ (e.g. Entra ID puts the
+login name in `preferred_username` as well, Auth0 typically in `nickname`).
 
 ## Repositories API
 
@@ -238,18 +325,27 @@ the server-side record of one agent execution; for `CODE_REVIEW` it is backed by
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| `POST` | `/` | `CreateAgentRunRequest { kind, repositoryId, branch, baseBranch, commitSha, pullRequest? }` | `202 Accepted`, `Location: /api/v1/agents/{id}`, `AgentRunResponse` |
-| `GET` | `/` | query `kind?`, `phase?`, `repositoryId?`, `page = 0`, `size = 20` (clamped to 1..200) | `200`, `PageResponse<AgentRunResponse> { items, page, size, total }`, newest first |
+| `POST` | `/` | `CreateAgentRunRequest { kind, repositoryId, branch, baseBranch, commitSha, pullRequest? }` | `202 Accepted`, `Location: /api/v1/agents/{id}`, `AgentRunResponse` with `createdBy` = the caller |
+| `GET` | `/` | query `kind?`, `phase?`, `repositoryId?`, `mine = false`, `createdBy?` (user UUID), `page = 0`, `size = 20` (clamped to 1..200) | `200`, `PageResponse<AgentRunResponse> { items, page, size, total }`, newest first |
 | `GET` | `/{id}` | — | `200`, `AgentRunResponse` |
 | `POST` | `/{id}/cancel` | — | `202 Accepted`, `AgentRunResponse` (phase `CANCELLED`) |
-| `GET` | `/watch` | query `agentId?`, `kind?`; header `Last-Event-ID?` | `200`, `text/event-stream` — see [Agent run watch](#agent-run-watch-sse) |
+| `GET` | `/watch` | query `agentId?`, `kind?`, `mine = false`, `createdBy?`; header `Last-Event-ID?` | `200`, `text/event-stream` — see [Agent run watch](#agent-run-watch-sse) |
 
 `{id}` is restricted to the UUID pattern `[0-9a-fA-F-]{36}`, so `/watch` never falls into the run-by-id route
 (a request to `/watch` without `Accept: text/event-stream` gets `406`, not `400`).
 
 `AgentRunResponse { id, kind, source, repositoryId, crName, crUid, generation, executionId, phase, reason,
-message, spec, createdAt, startedAt, completedAt, updatedAt }`. `spec` is the JSON persisted in
-`agent_runs.spec`: `{ repositoryUrl, branch, baseBranch, commitSha, pullRequest }`.
+message, spec, createdAt, startedAt, completedAt, updatedAt, createdBy }`. `spec` is the JSON persisted in
+`agent_runs.spec`: `{ repositoryUrl, branch, baseBranch, commitSha, pullRequest }`. `createdBy` is
+`{ id, username } | null` — the `users` row of the API caller that created the run (`username` is read live
+via a left join, so it follows the user's current claim), `null` for `EXTERNAL` runs and for runs created
+before `V2__users.sql`.
+
+Creator filters: `mine=true` restricts the page to runs created by the caller (`@CurrentUser`), `createdBy=<user
+id>` to runs of that user (e.g. an id taken from another run's `createdBy.id` or from `/api/v1/me`). Both may be
+combined only when they name the same user; `mine=true&createdBy=<other>` is a `400`
+(`AgentRunFilter.resolveCreatedBy`). All filters combine with `AND`; `mine=true` for a user without runs yields
+an empty page.
 
 Enums: `AgentKind { CODE_REVIEW }`, `RunSource { API, EXTERNAL }` (`EXTERNAL` = first seen through a status
 event, e.g. a CR applied with `kubectl`; such runs have no `repositoryId`), `AgentPhase { CREATED, PENDING,
@@ -260,15 +356,16 @@ Validation: `branch`/`baseBranch` not blank, `commitSha` must match `^[0-9a-fA-F
 
 | Status | Cause |
 |---|---|
-| `400` | Bean validation failure, unreadable body, malformed UUID/enum in body or query, unknown agent kind adapter. |
+| `400` | Bean validation failure, unreadable body, malformed UUID/enum in body or query, `mine=true` combined with a different `createdBy`, unknown agent kind adapter. |
 | `404` | Unknown run id; a path `{id}` that is not UUID-shaped (no route matches); unknown `repositoryId` on create. |
 | `409` | Cancel of a run that is already terminal. |
 | `500` | Applying the CR failed; the run stays visible with phase `FAILED`, reason `ApplyFailed` and the client exception message. |
 
 ### Create and cancel flow
 
-1. `AgentRunService.create` validates the repository (`RepositoryService.get`), inserts the run as
-   `CREATED`/`API` with `crName = cr-<run id>` and the spec JSON, and commits (`TransactionOperations`).
+1. `AgentRunService.create(request, user)` validates the repository (`RepositoryService.get`), inserts the run as
+   `CREATED`/`API` with `crName = cr-<run id>`, `created_by = user.id` and the spec JSON, and commits
+   (`TransactionOperations`).
 2. `CodeReviewAdapter.apply` builds a `CodeReview` in `sift.server.namespace` named `cr-<run id>` with labels
    `app.kubernetes.io/managed-by: sift-server`, `sift.org/run-id`, `sift.org/repository-id`, `spec` from the
    request plus the repository URL and `credentialsSecretRef` from `RepositoryService.secretRef` (omitted when
@@ -289,7 +386,7 @@ service picks the adapter by `request.kind`.
 
 - Unknown phase string (not an `AgentPhase`) → warn and skip.
 - No run for the uid → insert an `EXTERNAL` `CODE_REVIEW` run (`crName = reviewName`, spec from the event,
-  `repositoryId = null`) with the event's phase/reason/message/generation/executionId/timestamps.
+  `repositoryId = null`, `createdBy = null`) with the event's phase/reason/message/generation/executionId/timestamps.
 - Stored phase terminal → skip (a `CANCELLED` run is never resurrected).
 - `event.generation < stored.generation`, or `stored.observedAt != null && event.observedAt <= stored.observedAt`
   → skip (out-of-order or duplicate delivery).
@@ -325,7 +422,13 @@ type (inferred type precedence), independent of the publisher's `__TypeId__` hea
 |---|---|
 | `agentId` (query, UUID) | Only this run: the snapshot is that run (if it exists) and live events are filtered to it. |
 | `kind` (query, `AgentKind`) | Only runs of this kind (snapshot and live). |
+| `mine` (query, boolean, default `false`) | Only runs created by the caller (snapshot and live), like the list endpoint. |
+| `createdBy` (query, user UUID) | Only runs created by that user; `mine=true` with a different `createdBy` is a `400`. |
 | `Last-Event-ID` (header, epoch millis) | Resume: the snapshot contains only runs with `updated_at` after this instant. Malformed values are ignored (full snapshot). |
+
+The stream requires a bearer token like every other endpoint; it is authenticated once at connect time, so an
+open stream is not cut when the access token later expires — the next reconnect needs a fresh token. Browsers'
+native `EventSource` cannot set an `Authorization` header; use a fetch-based SSE client.
 
 Wire format — every data frame is a complete run, never a delta:
 

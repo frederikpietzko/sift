@@ -6,7 +6,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import org.sift.server.agents.AgentKind
+import org.sift.server.agents.AgentRunFilter
 import org.sift.server.config.ServerProperties
+import org.sift.server.security.CurrentUser
+import org.sift.server.users.User
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.GetMapping
@@ -24,6 +27,7 @@ import kotlin.time.toKotlinDuration
  * resumes via `Last-Event-ID` and only the runs written after that point are replayed as `SNAPSHOT`. Comment
  * frames (`:heartbeat`) keep idle connections alive through proxies. Spring MVC adapts the returned `Flow`
  * to an `SseEmitter` (`kotlinx-coroutines-reactor`); `spring.mvc.async.request-timeout=-1` keeps it open.
+ * `mine=true` / `createdBy` narrow both the snapshot and the live events to one creator, like the list endpoint.
  */
 @RestController
 @RequestMapping("/api/v1/agents/watch")
@@ -34,12 +38,21 @@ class AgentWatchController(
     private val heartbeat = properties.watch.heartbeat.toKotlinDuration()
 
     @GetMapping(produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    @Suppress("LongParameterList") // one parameter per query string filter
     fun watch(
         @RequestParam(required = false) agentId: UUID?,
         @RequestParam(required = false) kind: AgentKind?,
+        @RequestParam(defaultValue = "false") mine: Boolean,
+        @RequestParam(required = false) createdBy: UUID?,
         @RequestHeader(LAST_EVENT_ID, required = false) lastEventId: String?,
+        @CurrentUser user: User,
     ): Flow<ServerSentEvent<AgentRunEvent>> {
-        val request = WatchRequest(agentId = agentId, kind = kind, since = lastEventId.toResumePoint())
+        val request = WatchRequest(
+            agentId = agentId,
+            kind = kind,
+            since = lastEventId.toResumePoint(),
+            createdBy = AgentRunFilter.resolveCreatedBy(mine = mine, createdBy = createdBy, user = user),
+        )
         return merge(watches.watch(request).map { it.toServerSentEvent() }, heartbeats())
     }
 

@@ -38,7 +38,7 @@ class AgentRunWatchService(
 
     private fun load(request: WatchRequest): List<AgentRun> {
         val agentId = request.agentId
-        val filter = AgentRunFilter(kind = request.kind)
+        val filter = AgentRunFilter(kind = request.kind, createdBy = request.createdBy)
         val since = request.since
         return when {
             agentId != null -> listOfNotNull(runs.findById(agentId)).filter(request::matchesResume)
@@ -52,16 +52,24 @@ class AgentRunWatchService(
     }
 }
 
-/** Filter of one watch stream; [since] is the resume point taken from the SSE `Last-Event-ID` header. */
+/**
+ * Filter of one watch stream; [since] is the resume point taken from the SSE `Last-Event-ID` header and
+ * [createdBy] restricts the stream to runs requested by that user (`EXTERNAL` runs never match it).
+ */
 data class WatchRequest(
     val agentId: UUID? = null,
     val kind: AgentKind? = null,
     val since: Instant? = null,
+    val createdBy: UUID? = null,
 ) {
     fun matches(run: AgentRunResponse): Boolean =
-        (agentId == null || run.id == agentId) && (kind == null || run.kind == kind)
+        (agentId == null || run.id == agentId) &&
+            (kind == null || run.kind == kind) &&
+            (createdBy == null || run.createdBy?.id == createdBy)
 
-    /** Snapshot filter for a single run: the kind must match and, when resuming, the run must have changed since. */
+    /** Snapshot filter for a single run: kind and creator must match and, when resuming, it must have changed since. */
     internal fun matchesResume(run: AgentRun): Boolean =
-        (kind == null || run.kind == kind) && (since == null || run.updatedAt.toInstant().isAfter(since))
+        (kind == null || run.kind == kind) &&
+            (createdBy == null || run.createdBy?.id == createdBy) &&
+            (since == null || run.updatedAt.toInstant().isAfter(since))
 }
