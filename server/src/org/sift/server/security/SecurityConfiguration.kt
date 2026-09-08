@@ -1,5 +1,6 @@
 package org.sift.server.security
 
+import org.sift.server.users.UserProvisioningFilter
 import org.sift.server.users.UserService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration

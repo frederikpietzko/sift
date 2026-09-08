@@ -2,10 +2,10 @@ package org.sift.server.results
 
 import org.sift.events.CodeReviewCompletedEvent
 import org.sift.events.Severity
-import org.sift.server.agents.AgentPhase
-import org.sift.server.agents.AgentRunRepository
-import org.sift.server.agents.Page
+import org.sift.server.agents.AgentRunService
 import org.sift.server.api.NotFoundException
+import org.sift.server.api.Page
+import org.sift.server.results.persistence.ReviewResultRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -22,7 +22,7 @@ import java.util.UUID
 @Service
 class ReviewResultService(
     private val results: ReviewResultRepository,
-    private val runs: AgentRunRepository,
+    private val runs: AgentRunService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(ReviewResultService::class.java)
@@ -48,17 +48,8 @@ class ReviewResultService(
             log.debug("Result for execution {} already stored; ignoring duplicate event", event.executionId)
             return
         }
-        if (run != null && !run.phase.terminal) {
-            runs.updateStatus(
-                run.copy(
-                    phase = AgentPhase.SUCCESS,
-                    reason = REASON_RESULT_RECEIVED,
-                    message = null,
-                    completedAt = result.completedAt,
-                    observedAt = now,
-                    updatedAt = now,
-                ),
-            )
+        if (run != null) {
+            runs.completeWithResult(run.id, completedAt = result.completedAt)
         }
     }
 
@@ -86,7 +77,6 @@ class ReviewResultService(
         results.findById(id) ?: throw NotFoundException("Review result $id not found")
 
     companion object {
-        const val REASON_RESULT_RECEIVED = "ResultReceived"
         const val MIN_PAGE_SIZE = 1
         const val MAX_PAGE_SIZE = 200
     }

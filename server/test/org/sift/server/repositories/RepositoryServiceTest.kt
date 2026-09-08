@@ -7,6 +7,9 @@ import io.mockk.verify
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
 import org.sift.server.config.ServerProperties
+import org.sift.server.repositories.persistence.RepositoryRepository
+import org.sift.server.repositories.secrets.RepositorySecretSync
+import org.sift.server.repositories.secrets.TokenCipher
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
@@ -34,11 +37,13 @@ class RepositoryServiceTest {
         ),
     )
     private val clock = Clock.fixed(Instant.parse("2026-09-07T10:00:00Z"), ZoneOffset.UTC)
-    private val service = RepositoryService(repositories, cipher, secrets, clock)
+    private val usage = mockk<RepositoryUsageCheck>()
+    private val service = RepositoryService(repositories, cipher, secrets, listOf(usage), clock)
 
     init {
         every { secrets.secretName(any()) } answers { "sift-repo-${firstArg<UUID>()}" }
         every { repositories.findByName(any()) } returns null
+        every { usage.usage(any()) } returns null
     }
 
     @Test
@@ -175,15 +180,16 @@ class RepositoryServiceTest {
     }
 
     @Test
-    fun `delete removes secret then row and refuses while runs are active`() {
+    fun `delete removes secret then row and refuses while a usage check vetoes`() {
         val existing = repository(token = cipher.encrypt("t"))
         every { repositories.findById(existing.id) } returns existing
-        every { repositories.hasActiveRuns(existing.id) } returns true
-        assertFailsWith<ConflictException> { service.delete(existing.id) }
+        every { usage.usage(existing.id) } returns "active agent runs"
+        val conflict = assertFailsWith<ConflictException> { service.delete(existing.id) }
+        assertEquals("Repository ${existing.id} still has active agent runs", conflict.message)
         verify(exactly = 0) { secrets.delete(any()) }
         verify(exactly = 0) { repositories.delete(any()) }
 
-        every { repositories.hasActiveRuns(existing.id) } returns false
+        every { usage.usage(existing.id) } returns null
         service.delete(existing.id)
         verify(exactly = 1) { secrets.delete(existing.id) }
         verify(exactly = 1) { repositories.delete(existing.id) }

@@ -14,3 +14,6 @@ data class Repository(
 ) {
     val hasToken: Boolean get() = token != null
 }
+
+/** Access token at rest: AES-GCM ciphertext plus the IV it was encrypted with (see `TokenCipher`). */
+class EncryptedToken(val ciphertext: ByteArray, val iv: ByteArray)

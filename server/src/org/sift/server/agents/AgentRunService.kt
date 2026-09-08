@@ -1,8 +1,13 @@
 package org.sift.server.agents
 
 import org.sift.events.CodeReviewStatusChangedEvent
+import org.sift.server.agents.adapters.AgentKindAdapter
+import org.sift.server.agents.persistence.AgentRunRepository
+import org.sift.server.agents.web.CodeReviewRunSpec
+import org.sift.server.agents.web.CreateAgentRunRequest
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
+import org.sift.server.api.Page
 import org.sift.server.repositories.RepositoryService
 import org.sift.server.users.User
 import org.slf4j.LoggerFactory
@@ -22,6 +27,7 @@ import java.util.UUID
  * always finds it, and an apply failure is recorded as `FAILED` instead of rolling the run away.
  */
 @Service
+@Suppress("TooManyFunctions") // one method per use case; the run lifecycle is owned by this single service
 class AgentRunService(
     private val runs: AgentRunRepository,
     adapters: List<AgentKindAdapter>,
@@ -68,6 +74,31 @@ class AgentRunService(
     @Transactional(readOnly = true)
     fun list(filter: AgentRunFilter, page: Int, size: Int): Page<AgentRun> =
         runs.list(filter, page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+
+    /** The run an agent execution belongs to (newest wins for a reused id), or `null` when none is known. */
+    @Transactional(readOnly = true)
+    fun findByExecutionId(executionId: String): AgentRun? = runs.findByExecutionId(executionId)
+
+    /**
+     * Completes a run as `SUCCESS` because its result has been received, even if the operator's final status
+     * event is late or lost. Terminal runs (including `CANCELLED`) are left untouched and `null` is returned.
+     */
+    @Transactional
+    fun completeWithResult(id: UUID, completedAt: OffsetDateTime): AgentRun? {
+        val run = find(id)
+        if (run.phase.terminal) return null
+        val now = now()
+        return runs.updateStatus(
+            run.copy(
+                phase = AgentPhase.SUCCESS,
+                reason = REASON_RESULT_RECEIVED,
+                message = null,
+                completedAt = completedAt,
+                observedAt = now,
+                updatedAt = now,
+            ),
+        )
+    }
 
     @Transactional
     fun cancel(id: UUID): AgentRun {
@@ -196,6 +227,7 @@ class AgentRunService(
     companion object {
         const val REASON_APPLY_FAILED = "ApplyFailed"
         const val REASON_CANCELLED = "CancelledByUser"
+        const val REASON_RESULT_RECEIVED = "ResultReceived"
         const val MIN_PAGE_SIZE = 1
         const val MAX_PAGE_SIZE = 200
     }

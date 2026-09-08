@@ -4,6 +4,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import org.sift.server.config.ServerProperties
+import org.sift.server.users.persistence.UserRepository
 import org.springframework.security.oauth2.jwt.Jwt
 import java.time.Clock
 import java.time.Instant

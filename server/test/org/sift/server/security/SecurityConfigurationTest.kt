@@ -6,11 +6,11 @@ import io.mockk.verify
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.startsWith
 import org.jetbrains.exposed.v1.spring.boot4.autoconfigure.ExposedAutoConfiguration
-import org.sift.server.agents.AgentRunController
 import org.sift.server.agents.AgentRunFilter
 import org.sift.server.agents.AgentRunService
-import org.sift.server.agents.Page
+import org.sift.server.agents.web.AgentRunController
 import org.sift.server.api.ApiExceptionHandler
+import org.sift.server.api.Page
 import org.sift.server.config.ServerProperties
 import org.sift.server.users.TestUsers
 import org.sift.server.users.UserService

@@ -15,7 +15,9 @@ review results query API is in place (Step 6) and the Kubernetes manifests plus 
 are finished (Step 7). The API is an **OAuth2 resource server**: every `/api/**` call needs a JWT bearer token
 from the configured OIDC provider, callers are provisioned into `users` and runs are attributed to them
 ([ADR 0016](../adrs/0016-oauth2-resource-server-and-user-attribution.md), superseding
-[ADR 0014](../adrs/0014-defer-server-api-authentication.md)); see [Security](#security).
+[ADR 0014](../adrs/0014-defer-server-api-authentication.md)); see [Security](#security). The code is split into
+Spring Modulith application modules with verified boundaries ([ADR 0017](../adrs/0017-server-package-structure-with-spring-modulith.md),
+see [Module layout](#module-layout)).
 
 ## API summary
 
@@ -51,52 +53,73 @@ first token and cached).
 
 ## Module layout
 
+The server is organised as **Spring Modulith application modules** ([ADR 0017](../adrs/0017-server-package-structure-with-spring-modulith.md)):
+every direct sub-package of `org.sift.server` is a module, its base package is the module's API (domain
+model, service, SPI types) and the technical sub-packages `persistence`, `web`, `messaging`, `adapters`,
+`secrets` and `watch` are internal to it. Each module declares the modules it may use in a `ModuleMetadata`
+class (`@ApplicationModule(allowedDependencies = …)`); `ModularityTest` verifies the arrangement (no cycles,
+no access to another module's internals, only declared dependencies) and renders it to
+`server/build/spring-modulith-docs` (C4 PlantUML + AsciiDoc).
+
+| Module | Depends on | Purpose |
+|---|---|---|
+| `api` | — | RFC 7807 error handling, shared `Page`/`PageResponse`. |
+| `config` | — | `ServerProperties`, coroutine scope, `KubernetesClient`, queue topology. |
+| `users` | `api`, `config` | Authenticated identities, `@CurrentUser`, provisioning filter; exposes `persistence` as a named interface (`users :: persistence`) so `agents` can join the `users` table. |
+| `security` | `config`, `users` | OAuth2 resource server filter chain, problem-detail handlers, `/api/v1/auth/config`. |
+| `repositories` | `api`, `config` | Repositories and their credentials; `RepositoryUsageCheck` SPI lets other modules veto deletion. |
+| `agents` | `api`, `config`, `repositories`, `users`, `users :: persistence` | Agent runs: REST, `CodeReview` CR adapter, status consumer, SSE watch, `RepositoryUsageCheck` implementation. |
+| `results` | `api`, `config`, `agents` | Review results ingested from `code-review.completed`; links to and completes runs via `AgentRunService`. |
+
 | Path | Purpose |
 |---|---|
-| `server/module.yaml` | `jvm/app`, applies the shared detekt and Spring templates, `runtimeClasspathMode: jars`. |
+| `server/module.yaml` | `jvm/app`, applies the shared detekt and Spring templates, `runtimeClasspathMode: jars`; `spring-modulith-api` (annotations) in `dependencies`, `spring-modulith-starter-test` in `test-dependencies`. |
 | `src/org/sift/server/Main.kt`, `Application.kt` | Entry point. Imports `ExposedAutoConfiguration`, excludes `DataSourceTransactionManagerAutoConfiguration` so Exposed's `SpringTransactionManager` is the only transaction manager. |
+| `src/org/sift/server/*/ModuleMetadata.kt` | One per module: `@ApplicationModule(allowedDependencies = …) @PackageInfo`; `users/persistence/ModuleMetadata.kt` carries `@NamedInterface("persistence")`. |
+| `src/org/sift/server/api/` | `ApiExceptionHandler` (`@RestControllerAdvice`, RFC 7807 `ProblemDetail`), `NotFoundException` (404), `ConflictException` (409), `Paging.kt` (`Page<T>`, `PageResponse<T>`). |
 | `src/org/sift/server/config/ServerProperties.kt` | `@ConfigurationProperties("sift.server")`, validated; nested `Watch { enabled, heartbeat }` and `Auth { clientId, scopes, claims { username, email } }`. |
 | `src/org/sift/server/config/ApplicationCoroutineScope.kt` | The application `CoroutineScope` bean (`SupervisorJob + Dispatchers.IO + CoroutineName`), cancelled on context close. |
 | `src/org/sift/server/config/KubernetesConfiguration.kt` | Default `KubernetesClient` bean (`KubernetesClientBuilder().build()`, backs off if one is already defined). |
-| `src/org/sift/server/config/MessagingConfiguration.kt` | `ServerQueues` constants and the `Declarables` bean with the server's consumer queues, DLX and bindings. |
-| `src/org/sift/server/api/` | `ApiExceptionHandler` (`@RestControllerAdvice`, RFC 7807 `ProblemDetail`), `NotFoundException` (404), `ConflictException` (409). |
-| `src/org/sift/server/security/SecurityConfiguration.kt` | The `SecurityFilterChain`: stateless, CSRF off, `oauth2ResourceServer.jwt`, permit list `ANONYMOUS_GET_PATHS` (`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/api/v1/auth/config`), everything else `authenticated`; registers `UserProvisioningFilter` after `BearerTokenAuthenticationFilter`. |
+| `src/org/sift/server/config/MessagingConfiguration.kt` | `ServerQueues` constants (queue names and the `CONSUMERS_ENABLED` property key) and the `Declarables` bean with the server's consumer queues, DLX and bindings. |
+| `src/org/sift/server/security/SecurityConfiguration.kt` | The `SecurityFilterChain`: stateless, CSRF off, `oauth2ResourceServer.jwt`, permit list `ANONYMOUS_GET_PATHS` (`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/api/v1/auth/config`), everything else `authenticated`; registers `users.UserProvisioningFilter` after `BearerTokenAuthenticationFilter`. |
 | `src/org/sift/server/security/ProblemDetailAuthHandlers.kt` | `ProblemDetailAuthenticationEntryPoint` (delegates to `BearerTokenAuthenticationEntryPoint` for `WWW-Authenticate`, then writes a `401` problem) and `ProblemDetailAccessDeniedHandler` (`403` problem). |
-| `src/org/sift/server/security/UserProvisioningFilter.kt` | `OncePerRequestFilter`: for a `JwtAuthenticationToken` calls `UserService.provision(jwt)` and stores the `User` as request attribute. |
-| `src/org/sift/server/security/CurrentUser.kt` | `@CurrentUser` parameter annotation, `CurrentUserArgumentResolver` and the `WebMvcConfigurer` registering it. |
 | `src/org/sift/server/security/AuthConfigController.kt` | Anonymous `GET /api/v1/auth/config` → `AuthConfigResponse { issuerUri, clientId, scopes }`. |
-| `src/org/sift/server/users/UsersTable.kt`, `User.kt` | Exposed DSL table for `users` and the domain model. |
-| `src/org/sift/server/users/UserRepository.kt`, `UserService.kt` | Blocking Exposed `upsert` on `(issuer, subject)` / `findById` / `findByIdentity`; `@Transactional provision(jwt)` mapping the configured claims (username falls back to `sub`), `get(id)`. |
-| `src/org/sift/server/users/MeController.kt`, `UserResponse.kt` | `GET /api/v1/me` → `UserResponse { id, subject, issuer, username, email }`. |
-| `src/org/sift/server/repositories/RepositoriesTable.kt` | Exposed DSL table for `repositories`. |
-| `src/org/sift/server/repositories/Repository.kt`, `RepositoryRepository.kt` | Domain model (`Repository`, `EncryptedToken`) and blocking Exposed DSL repository (insert/update/find/delete/`hasActiveRuns`). |
-| `src/org/sift/server/repositories/TokenCipher.kt` | AES-256-GCM encryption of tokens at rest, keyed by `SIFT_SERVER_ENCRYPTION_KEY`. |
-| `src/org/sift/server/repositories/RepositorySecretSync.kt` | Server-side-applies/deletes the per-repository k8s Secret. |
-| `src/org/sift/server/repositories/RepositoryService.kt` | `@Transactional` use cases, URL validation, `SecretRef` lookup for the CR builder. |
-| `src/org/sift/server/repositories/RepositoryController.kt`, `RepositoryDtos.kt` | `/api/v1/repositories` REST endpoints and request/response DTOs. |
-| `src/org/sift/server/agents/AgentRunsTable.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3, nullable `created_by` → `users.id`). |
-| `src/org/sift/server/agents/AgentRun.kt`, `AgentRunRepository.kt` | Domain model (`AgentRun`, `RunCreator`, `AgentKind`, `AgentPhase`, `RunSource`, `AgentRunFilter` incl. `resolveCreatedBy(mine, createdBy, user)`, `Page`) and blocking Exposed DSL repository (insert/update/updateStatus/findById/findByCrUid/findByExecutionId/list/findUpdatedSince; reads left-join `users` for the creator's username). |
-| `src/org/sift/server/agents/AgentKindAdapter.kt`, `CodeReviewAdapter.kt` | Per-kind bridge to the cluster; `CodeReviewAdapter` builds, creates and foreground-deletes `CodeReview` CRs. |
-| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: `create(request, user)` (persist with `createdBy` → apply CR → record uid), get, list, cancel, `applyStatus` upsert from events (`EXTERNAL` runs keep `createdBy = null`). |
-| `src/org/sift/server/agents/AgentRunController.kt`, `AgentRunDtos.kt` | `/api/v1/agents` REST endpoints and request/response DTOs. |
-| `src/org/sift/server/agents/AgentStatusConsumer.kt` | `@RabbitListener` on `sift.server.code-review.status` feeding `AgentRunService.applyStatus`. |
-| `src/org/sift/server/watch/AgentRunEvent.kt`, `AgentRunEvents.kt` | SSE payload (`AgentRunEvent { type: SNAPSHOT/UPDATED, run }`) and the in-process `SharedFlow` fan-out (no replay, buffer 256, `DROP_OLDEST`). |
-| `src/org/sift/server/watch/PgNotificationConnection.kt`, `PgNotificationListener.kt` | Dedicated non-pooled `LISTEN sift_agent_runs` connection (`application_name=sift-server-watch`) and the single listener coroutine that reloads notified runs and emits `UPDATED`, reconnecting with backoff. |
-| `src/org/sift/server/watch/AgentRunWatchService.kt`, `AgentWatchController.kt` | Snapshot + live-event flow composition (`WatchRequest`) and `GET /api/v1/agents/watch` (`Flow<ServerSentEvent<AgentRunEvent>>`, heartbeats). |
-| `src/org/sift/server/results/ReviewResultsTable.kt`, `ReviewFindingsTable.kt` | Exposed DSL tables for `review_results` and `review_findings`. |
-| `src/org/sift/server/results/ReviewResult.kt`, `ReviewResultRepository.kt` | Domain model (`ReviewResult`, `ReviewFinding`, `ReviewResultFilter`) and blocking Exposed DSL repository (`insert` via `insertIgnore`, `findById`, `findByExecutionId`, `list`, `findings`, `countFindings`). |
-| `src/org/sift/server/results/ReviewResultService.kt` | `@Transactional store(event)` ingestion (idempotent, links and promotes the agent run) plus read-only `get`/`list`/`findings`/`findingCounts`. |
-| `src/org/sift/server/results/ReviewResultConsumer.kt` | `@RabbitListener` on `sift.server.code-review.completed` feeding `ReviewResultService.store`. |
-| `src/org/sift/server/results/ReviewResultController.kt`, `ReviewResultDtos.kt` | `/api/v1/results` REST endpoints and response DTOs. |
+| `src/org/sift/server/users/User.kt`, `UserService.kt` | Domain model and `@Transactional provision(jwt)` mapping the configured claims (username falls back to `sub`), `get(id)`. |
+| `src/org/sift/server/users/UserProvisioningFilter.kt` | `OncePerRequestFilter`: for a `JwtAuthenticationToken` calls `UserService.provision(jwt)` and stores the `User` as request attribute. |
+| `src/org/sift/server/users/CurrentUser.kt` | `@CurrentUser` parameter annotation, `CurrentUserArgumentResolver` and the `WebMvcConfigurer` registering it. |
+| `src/org/sift/server/users/persistence/UsersTable.kt`, `UserRepository.kt` | Exposed DSL table for `users` and the blocking `upsert` on `(issuer, subject)` / `findById` / `findByIdentity` (named interface `users :: persistence`). |
+| `src/org/sift/server/users/web/MeController.kt`, `UserResponse.kt` | `GET /api/v1/me` → `UserResponse { id, subject, issuer, username, email }`. |
+| `src/org/sift/server/repositories/Repository.kt` | Domain model (`Repository`, `EncryptedToken`). |
+| `src/org/sift/server/repositories/RepositoryService.kt` | `@Transactional` use cases, URL validation, `SecretRef` lookup for the CR builder; `delete` asks every `RepositoryUsageCheck` before removing Secret and row (`409` when one vetoes). |
+| `src/org/sift/server/repositories/RepositoryUsageCheck.kt` | SPI (`fun interface`) implemented by modules that reference repositories; returns what still uses the repository or `null`. |
+| `src/org/sift/server/repositories/persistence/RepositoriesTable.kt`, `RepositoryRepository.kt` | Exposed DSL table for `repositories` and the blocking repository (insert/update/find/delete). |
+| `src/org/sift/server/repositories/secrets/TokenCipher.kt` | AES-256-GCM encryption of tokens at rest, keyed by `SIFT_SERVER_ENCRYPTION_KEY`. |
+| `src/org/sift/server/repositories/secrets/RepositorySecretSync.kt` | Server-side-applies/deletes the per-repository k8s Secret. |
+| `src/org/sift/server/repositories/web/RepositoryController.kt`, `RepositoryDtos.kt` | `/api/v1/repositories` REST endpoints and request/response DTOs. |
+| `src/org/sift/server/agents/AgentRun.kt` | Domain model (`AgentRun`, `RunCreator`, `AgentKind`, `AgentPhase`, `RunSource`, `AgentRunFilter` incl. `resolveCreatedBy(mine, createdBy, user)`). |
+| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: `create(request, user)` (persist with `createdBy` → apply CR → record uid), get, list, cancel, `applyStatus` upsert from events (`EXTERNAL` runs keep `createdBy = null`), `findByExecutionId` and `completeWithResult` for the `results` module. |
+| `src/org/sift/server/agents/AgentRunRepositoryUsageCheck.kt` | `RepositoryUsageCheck` implementation: vetoes deleting a repository with non-terminal runs. |
+| `src/org/sift/server/agents/adapters/AgentKindAdapter.kt`, `CodeReviewAdapter.kt` | Per-kind bridge to the cluster; `CodeReviewAdapter` builds, creates and foreground-deletes `CodeReview` CRs. |
+| `src/org/sift/server/agents/persistence/AgentRunsTable.kt`, `AgentRunRepository.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3; `repository_id`/`created_by` are plain columns, the FKs live in Flyway) and the blocking repository (insert/update/updateStatus/findById/findByCrUid/findByExecutionId/list/findUpdatedSince/hasActiveRuns; reads left-join `users` for the creator's username). |
+| `src/org/sift/server/agents/messaging/AgentStatusConsumer.kt` | `@RabbitListener` on `sift.server.code-review.status` feeding `AgentRunService.applyStatus`. |
+| `src/org/sift/server/agents/web/AgentRunController.kt`, `AgentRunDtos.kt` | `/api/v1/agents` REST endpoints and request/response DTOs (`CreateAgentRunRequest`, `CodeReviewRunSpec`, `AgentRunResponse`). |
+| `src/org/sift/server/agents/watch/AgentRunEvent.kt`, `AgentRunEvents.kt` | SSE payload (`AgentRunEvent { type: SNAPSHOT/UPDATED, run }`) and the in-process `SharedFlow` fan-out (no replay, buffer 256, `DROP_OLDEST`). |
+| `src/org/sift/server/agents/watch/PgNotificationConnection.kt`, `PgNotificationListener.kt` | Dedicated non-pooled `LISTEN sift_agent_runs` connection (`application_name=sift-server-watch`) and the single listener coroutine that reloads notified runs and emits `UPDATED`, reconnecting with backoff. |
+| `src/org/sift/server/agents/watch/AgentRunWatchService.kt`, `AgentWatchController.kt` | Snapshot + live-event flow composition (`WatchRequest`) and `GET /api/v1/agents/watch` (`Flow<ServerSentEvent<AgentRunEvent>>`, heartbeats). |
+| `src/org/sift/server/results/ReviewResult.kt` | Domain model (`ReviewResult`, `ReviewFinding`, `ReviewResultFilter`). |
+| `src/org/sift/server/results/ReviewResultService.kt` | `@Transactional store(event)` ingestion (idempotent, links the run via `AgentRunService.findByExecutionId` and completes it via `completeWithResult`) plus read-only `get`/`list`/`findings`/`findingCounts`. |
+| `src/org/sift/server/results/persistence/ReviewResultsTable.kt`, `ReviewFindingsTable.kt`, `ReviewResultRepository.kt` | Exposed DSL tables for `review_results` and `review_findings` and the blocking repository (`insert` via `insertIgnore`, `findById`, `findByExecutionId`, `list`, `findings`, `countFindings`). |
+| `src/org/sift/server/results/messaging/ReviewResultConsumer.kt` | `@RabbitListener` on `sift.server.code-review.completed` feeding `ReviewResultService.store`. |
+| `src/org/sift/server/results/web/ReviewResultController.kt`, `ReviewResultDtos.kt` | `/api/v1/results` REST endpoints and response DTOs. |
 | `resources/application.yaml` | Default configuration, all secrets/hosts from environment variables. |
 | `resources/db/migration/` | Flyway migrations (`V1__init.sql`, `V2__users.sql`). |
-| `test/org/sift/server/` | `security/TestSecurityConfiguration` (`@Primary JwtDecoder` decoding base64url JSON claim sets built by `TestTokens.bearer(...)`, plus the MockMvc post-processor `TestTokens.authenticated(...)` — no IdP is contacted, the real filter chain runs), `security/SecurityConfigurationTest` (401 problem + `WWW-Authenticate` without/with rejected token, anonymous probes and `/api/v1/auth/config`), `security/AuthConfigControllerTest`, `users/*Test` (`UserRepositoryTest` upsert semantics against Postgres, `UserServiceTest` claim mapping and `sub` fallback, `MeControllerTest`), `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled, test decoder imported), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create with bearer → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`; plus a `401` without token), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/*Test` (cipher, Secret sync via fabric8 mock server, service with mockk, `@WebMvcTest` controller, repository against Postgres), `agents/*Test` (service with mockk, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller incl. `mine`/`createdBy`, repository against Postgres incl. `created_by`, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ), `results/*Test` (repository against Postgres incl. duplicate `execution_id`, service with mockk, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery), `watch/*Test` (`AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `WatchIntegrationTest` base with the listener enabled on a `RANDOM_PORT` server: `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`). `@WebMvcTest` slices import `SecurityConfiguration` + `TestSecurityConfiguration` and mock `UserService`. |
+| `test/org/sift/server/` | Tests mirror the module packages (`agents/web/AgentRunControllerTest`, `agents/persistence/AgentRunRepositoryTest`, `agents/watch/*`, `results/messaging/ReviewResultConsumerIntegrationTest`, …). `ModularityTest` (Spring Modulith `verify()`, expected module set, documentation rendering; test classes are excluded from the analysis because fixtures are shared across modules). Fixtures: `security/TestSecurityConfiguration` (`@Primary JwtDecoder` decoding base64url JSON claim sets built by `TestTokens.bearer(...)`, plus the MockMvc post-processor `TestTokens.authenticated(...)` — no IdP is contacted, the real filter chain runs), `users/TestUsers`, `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled, test decoder imported), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `agents/watch/WatchIntegrationTest` (listener enabled on a `RANDOM_PORT` server). Coverage: `security/SecurityConfigurationTest` (401 problem + `WWW-Authenticate` without/with rejected token, anonymous probes and `/api/v1/auth/config`), `security/AuthConfigControllerTest`, `users/**` (upsert semantics against Postgres, claim mapping and `sub` fallback, `MeControllerTest`), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create with bearer → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`; plus a `401` without token), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/**` (cipher, Secret sync via fabric8 mock server, service with mockk incl. the `RepositoryUsageCheck` veto, `@WebMvcTest` controller, repository against Postgres), `agents/**` (service with mockk incl. `completeWithResult`, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller incl. `mine`/`createdBy`, repository against Postgres incl. `created_by` and `hasActiveRuns`, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ, `AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`), `results/**` (repository against Postgres incl. duplicate `execution_id`, service with a mocked `AgentRunService`, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery). `@WebMvcTest` slices import `SecurityConfiguration` + `TestSecurityConfiguration` and mock `UserService`. |
 
 Stack: Spring Boot 4.1.1 (Web MVC, Validation, Actuator, AMQP, Flyway, OAuth2 Resource Server / Spring Security 7;
 `spring-security-test` in tests), Exposed 1.5.0
 (`exposed-spring-boot4-starter`, `exposed-jdbc`, `exposed-json`, `exposed-java-time`), PostgreSQL
 driver, `kotlinx-coroutines-reactor` (Kotlin `Flow` → SSE in Spring MVC), fabric8 `kubernetes-client`, `//k8s/crds`,
-`//messaging`.
+`//messaging`, Spring Modulith 2.0.5 (`spring-modulith-api` at compile time, `spring-modulith-starter-test` in tests).
 
 ## Configuration
 
@@ -302,7 +325,7 @@ the operator applies to `CodeReview.spec.repositoryUrl`.
 |---|---|
 | `400` | Bean validation failure (`MethodArgumentNotValidException`), unreadable body, malformed UUID, invalid URL, `clearToken` + `token`. |
 | `404` | Unknown repository id. |
-| `409` | Duplicate `name` on create; delete while the repository still has `agent_runs` in a non-terminal phase (not `SUCCESS`/`FAILED`/`CANCELLED`). |
+| `409` | Duplicate `name` on create; delete while a `RepositoryUsageCheck` vetoes — the `agents` module does so while the repository still has `agent_runs` in a non-terminal phase (not `SUCCESS`/`FAILED`/`CANCELLED`). |
 
 ### Token encryption and Secret sync
 
@@ -501,9 +524,10 @@ consumer by `sift.server.messaging.consumers-enabled`) hands every `CodeReviewCo
    `insertIgnore`), `completed_at` from the event and `received_at = now`; findings are batch-inserted only
    when the result row was actually inserted. A redelivered or duplicate event therefore changes nothing and is
    logged at debug — the first delivery wins, later payloads for the same `executionId` are discarded.
-3. If the result was inserted and the linked run is still non-terminal (`CREATED`/`PENDING`/`RUNNING`), it is
-   promoted through `AgentRunRepository.updateStatus` to `SUCCESS`, reason `ResultReceived`, `message = null`,
-   `completedAt = event.completedAt`, `observedAt = updatedAt = now`; `generation` and `executionId` are kept.
+3. If the result was inserted and a run is linked, `AgentRunService.completeWithResult(runId, completedAt)` promotes
+   it — provided it is still non-terminal (`CREATED`/`PENDING`/`RUNNING`) — to `SUCCESS`, reason `ResultReceived`,
+   `message = null`, `completedAt = event.completedAt`, `observedAt = updatedAt = now`; `generation` and
+   `executionId` are kept.
    The agent has evidently finished even if the operator's final status event is late or lost, and the write
    fires `agent_runs_notify`, so watchers see the `SUCCESS` frame. Terminal runs (including `CANCELLED`) are
    never touched, and a later `code-review.status` event for the run is skipped by the terminal-phase rule.

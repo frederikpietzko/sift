@@ -13,6 +13,12 @@ import org.springframework.context.annotation.Configuration
 
 /** Names of the server-owned RabbitMQ queues and exchanges. */
 object ServerQueues {
+    /**
+     * Property gating every `@RabbitListener` in the server. `false` removes the listeners entirely; unlike
+     * `spring.rabbitmq.listener.simple.auto-startup=false` this also holds when Spring Test restarts a paused
+     * cached context, which starts every listener container regardless of its auto-startup flag.
+     */
+    const val CONSUMERS_ENABLED = "sift.server.messaging.consumers-enabled"
     const val DEAD_LETTER_EXCHANGE = "sift.events.dlx"
     const val DEAD_LETTER = "sift.server.dead-letter"
     const val CODE_REVIEW_STATUS = "sift.server.code-review.status"

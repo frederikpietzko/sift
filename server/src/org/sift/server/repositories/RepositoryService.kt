@@ -2,6 +2,9 @@ package org.sift.server.repositories
 
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
+import org.sift.server.repositories.persistence.RepositoryRepository
+import org.sift.server.repositories.secrets.RepositorySecretSync
+import org.sift.server.repositories.secrets.TokenCipher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.net.URI
@@ -18,6 +21,7 @@ class RepositoryService(
     private val repositories: RepositoryRepository,
     private val cipher: TokenCipher,
     private val secrets: RepositorySecretSync,
+    private val usageChecks: List<RepositoryUsageCheck> = emptyList(),
     private val clock: Clock = Clock.systemUTC(),
 ) {
     fun create(name: String, url: String, token: String?): Repository {
@@ -86,8 +90,8 @@ class RepositoryService(
 
     fun delete(id: UUID) {
         find(id)
-        if (repositories.hasActiveRuns(id)) {
-            throw ConflictException("Repository $id still has active agent runs")
+        usageChecks.firstNotNullOfOrNull { check -> check.usage(id) }?.let { usage ->
+            throw ConflictException("Repository $id still has $usage")
         }
         secrets.delete(id)
         repositories.delete(id)

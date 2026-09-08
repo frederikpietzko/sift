@@ -6,8 +6,13 @@ import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
 import org.sift.events.CodeReviewStatusChangedEvent
+import org.sift.server.agents.adapters.AgentKindAdapter
+import org.sift.server.agents.adapters.AppliedResource
+import org.sift.server.agents.persistence.AgentRunRepository
+import org.sift.server.agents.web.CreateAgentRunRequest
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
+import org.sift.server.api.Page
 import org.sift.server.repositories.Repository
 import org.sift.server.repositories.RepositoryService
 import org.sift.server.users.TestUsers
@@ -22,6 +27,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -177,6 +183,48 @@ class AgentRunServiceTest {
         assertSame(page, service.list(AgentRunFilter(), page = -3, size = 5000))
         every { runs.list(AgentRunFilter(phase = AgentPhase.PENDING), 2, 1) } returns page
         assertSame(page, service.list(AgentRunFilter(phase = AgentPhase.PENDING), page = 2, size = 0))
+    }
+
+    @Test
+    fun `completeWithResult promotes a non-terminal run to SUCCESS keeping generation and execution id`() {
+        val run = run(phase = AgentPhase.RUNNING, generation = 3).copy(executionId = "uid:3")
+        every { runs.findById(run.id) } returns run
+        val completedAt = OffsetDateTime.now(clock).minusMinutes(1)
+
+        val completed = assertNotNull(service.completeWithResult(run.id, completedAt))
+
+        assertEquals(run.id, completed.id)
+        assertEquals(AgentPhase.SUCCESS, completed.phase)
+        assertEquals(AgentRunService.REASON_RESULT_RECEIVED, completed.reason)
+        assertNull(completed.message)
+        assertEquals(completedAt, completed.completedAt)
+        assertEquals(OffsetDateTime.now(clock), completed.observedAt)
+        assertEquals(OffsetDateTime.now(clock), completed.updatedAt)
+        assertEquals("uid:3", completed.executionId)
+        assertEquals(3L, completed.generation)
+        verify(exactly = 1) { runs.updateStatus(completed) }
+    }
+
+    @Test
+    fun `completeWithResult leaves terminal runs untouched and unknown ids are not found`() {
+        listOf(AgentPhase.SUCCESS, AgentPhase.FAILED, AgentPhase.CANCELLED).forEach { phase ->
+            val run = run(phase = phase)
+            every { runs.findById(run.id) } returns run
+            assertNull(service.completeWithResult(run.id, OffsetDateTime.now(clock)), phase.name)
+        }
+        val missing = UUID.randomUUID()
+        every { runs.findById(missing) } returns null
+        assertFailsWith<NotFoundException> { service.completeWithResult(missing, OffsetDateTime.now(clock)) }
+        verify(exactly = 0) { runs.updateStatus(any()) }
+    }
+
+    @Test
+    fun `findByExecutionId delegates to the repository`() {
+        val run = run(phase = AgentPhase.RUNNING)
+        every { runs.findByExecutionId("uid:1") } returns run
+        assertSame(run, service.findByExecutionId("uid:1"))
+        every { runs.findByExecutionId("nope") } returns null
+        assertNull(service.findByExecutionId("nope"))
     }
 
     @Test

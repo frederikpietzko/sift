@@ -2,6 +2,7 @@ package org.sift.server.users
 
 import org.sift.server.api.NotFoundException
 import org.sift.server.config.ServerProperties
+import org.sift.server.users.persistence.UserRepository
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional

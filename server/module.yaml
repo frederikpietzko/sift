@@ -28,6 +28,8 @@ dependencies:
   - $libs.kotlinx.coroutines.reactor
   - $libs.jackson.module.kotlin
   - $libs.fabrics8.kubernetes.client
+  # Annotations only (@ApplicationModule, @NamedInterface); the structure is verified in tests.
+  - $libs.spring.modulith.api
   - //k8s/crds
   - //messaging
 
@@ -43,3 +45,4 @@ test-dependencies:
   - $libs.testcontainers.rabbitmq
   - $libs.testcontainers.junit.jupiter
   - $libs.fabrics8.kubernetes.server.mock
+  - $libs.spring.modulith.starter.test

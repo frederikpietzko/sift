@@ -10,10 +10,11 @@ import org.sift.events.Severity
 import org.sift.server.agents.AgentKind
 import org.sift.server.agents.AgentPhase
 import org.sift.server.agents.AgentRun
-import org.sift.server.agents.AgentRunRepository
-import org.sift.server.agents.Page
+import org.sift.server.agents.AgentRunService
 import org.sift.server.agents.RunSource
 import org.sift.server.api.NotFoundException
+import org.sift.server.api.Page
+import org.sift.server.results.persistence.ReviewResultRepository
 import tools.jackson.databind.json.JsonMapper
 import java.time.Clock
 import java.time.Instant
@@ -28,7 +29,7 @@ import kotlin.test.assertSame
 
 class ReviewResultServiceTest {
     private val results = mockk<ReviewResultRepository>(relaxed = true)
-    private val runs = mockk<AgentRunRepository>(relaxed = true)
+    private val runs = mockk<AgentRunService>(relaxed = true)
     private val clock = Clock.fixed(Instant.parse("2026-09-07T10:00:00Z"), ZoneOffset.UTC)
     private val service = ReviewResultService(results = results, runs = runs, clock = clock)
     private val mapper = JsonMapper.builder().build()
@@ -51,17 +52,14 @@ class ReviewResultServiceTest {
 
     init {
         every { results.insert(any(), any()) } returns true
-        every { runs.updateStatus(any()) } answers { firstArg() }
     }
 
     @Test
-    fun `store links the run by execution id and promotes a non-terminal run to SUCCESS`() {
+    fun `store links the run by execution id and completes it with the result`() {
         val run = run(phase = AgentPhase.RUNNING)
         every { runs.findByExecutionId("uid-1:1") } returns run
         val inserted = slot<ReviewResult>()
         every { results.insert(capture(inserted), findings) } returns true
-        val updated = slot<AgentRun>()
-        every { runs.updateStatus(capture(updated)) } answers { updated.captured }
 
         service.store(event)
 
@@ -77,30 +75,7 @@ class ReviewResultServiceTest {
         assertEquals(COMPLETED.atOffset(ZoneOffset.UTC), result.completedAt)
         assertEquals(OffsetDateTime.now(clock), result.receivedAt)
 
-        assertEquals(run.id, updated.captured.id)
-        assertEquals(AgentPhase.SUCCESS, updated.captured.phase)
-        assertEquals(ReviewResultService.REASON_RESULT_RECEIVED, updated.captured.reason)
-        assertNull(updated.captured.message)
-        assertEquals(COMPLETED.atOffset(ZoneOffset.UTC), updated.captured.completedAt)
-        assertEquals(OffsetDateTime.now(clock), updated.captured.observedAt)
-        assertEquals(OffsetDateTime.now(clock), updated.captured.updatedAt)
-        assertEquals(run.executionId, updated.captured.executionId)
-        assertEquals(run.generation, updated.captured.generation)
-    }
-
-    @Test
-    fun `store does not touch a run that is already terminal`() {
-        listOf(AgentPhase.SUCCESS, AgentPhase.FAILED, AgentPhase.CANCELLED).forEach { phase ->
-            val run = run(phase = phase)
-            every { runs.findByExecutionId("uid-1:1") } returns run
-            val inserted = slot<ReviewResult>()
-            every { results.insert(capture(inserted), findings) } returns true
-
-            service.store(event)
-
-            assertEquals(run.id, inserted.captured.agentRunId, phase.name)
-        }
-        verify(exactly = 0) { runs.updateStatus(any()) }
+        verify(exactly = 1) { runs.completeWithResult(run.id, COMPLETED.atOffset(ZoneOffset.UTC)) }
     }
 
     @Test
@@ -112,7 +87,7 @@ class ReviewResultServiceTest {
         service.store(event)
 
         assertNull(inserted.captured.agentRunId)
-        verify(exactly = 0) { runs.updateStatus(any()) }
+        verify(exactly = 0) { runs.completeWithResult(any(), any()) }
     }
 
     @Test
@@ -123,7 +98,7 @@ class ReviewResultServiceTest {
         service.store(event)
 
         verify(exactly = 1) { results.insert(any(), findings) }
-        verify(exactly = 0) { runs.updateStatus(any()) }
+        verify(exactly = 0) { runs.completeWithResult(any(), any()) }
     }
 
     @Test
