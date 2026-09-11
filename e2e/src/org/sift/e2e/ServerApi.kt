@@ -97,6 +97,16 @@ class ServerApi(private val baseUrl: String, private val tokenSupplier: () -> St
         return http.send(request, HttpResponse.BodyHandlers.ofString()).toApiResponse()
     }
 
+    fun put(path: String, json: String): ApiResponse {
+        val request = request(path)
+            .timeout(REQUEST_TIMEOUT)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        return http.send(request, HttpResponse.BodyHandlers.ofString()).toApiResponse()
+    }
+
     fun get(path: String): ApiResponse {
         val request = request(path)
             .timeout(REQUEST_TIMEOUT)

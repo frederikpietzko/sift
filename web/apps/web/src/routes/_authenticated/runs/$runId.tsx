@@ -1,6 +1,6 @@
 import { isSiftApiError, isTerminalPhase, type AgentRunResponse } from '@sift/api-client'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeftIcon, FileSearchIcon, Trash2Icon } from 'lucide-react'
+import { ArrowLeftIcon, FileSearchIcon, PencilIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAgentRun, useAgentRunWatch } from '@/api/hooks/agents'
@@ -13,6 +13,7 @@ import { CancelRunButton } from '@/features/runs/cancel-run-button'
 import { DeleteRunDialog } from '@/features/runs/delete-run-dialog'
 import { PhaseBadge } from '@/features/runs/phase-badge'
 import { RunDetails } from '@/features/runs/run-details'
+import { RunFormDialog } from '@/features/runs/run-form-dialog'
 import { kindLabel } from '@/features/runs/run-spec'
 import { WatchStatusIndicator } from '@/features/runs/watch-status'
 
@@ -27,7 +28,8 @@ function RunDetailPage() {
   // the stream narrows to this run and stops once it can no longer change
   const watch = useAgentRunWatch({ query: { agentId: runId }, enabled: !terminal })
   const repository = useRepository(run.data?.repositoryId ?? '', Boolean(run.data?.repositoryId))
-  const result = useReviewResultForRun(runId, run.data?.phase === 'SUCCESS')
+  // a stored result outlives its custom resource, so superseded/cancelled runs can have one too
+  const result = useReviewResultForRun(runId, run.isSuccess)
 
   return (
     <>
@@ -80,6 +82,9 @@ function RunDetailContent({ run, repositoryName, resultId, watchStatus }: RunDet
   const terminal = isTerminalPhase(run.phase)
   const navigate = useNavigate()
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  // `EXTERNAL` runs are not owned by the API and cannot be revised
+  const editable = run.source !== 'EXTERNAL'
   return (
     <>
       <PageHeader
@@ -97,6 +102,15 @@ function RunDetailContent({ run, repositoryName, resultId, watchStatus }: RunDet
                 </Link>
               </Button>
             )}
+            <Button
+              variant="outline"
+              disabled={!editable}
+              title={editable ? undefined : 'External runs are not managed through the API'}
+              onClick={() => setEditOpen(true)}
+            >
+              <PencilIcon />
+              Edit run
+            </Button>
             <CancelRunButton run={run} />
             <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
               <Trash2Icon />
@@ -111,6 +125,15 @@ function RunDetailContent({ run, repositoryName, resultId, watchStatus }: RunDet
         onOpenChange={setDeleteOpen}
         run={run}
         onDeleted={() => void navigate({ to: '/runs' })}
+      />
+      <RunFormDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        mode="edit"
+        run={run}
+        onSubmitted={(successor) => {
+          if (successor?.id) void navigate({ to: '/runs/$runId', params: { runId: successor.id } })
+        }}
       />
     </>
   )

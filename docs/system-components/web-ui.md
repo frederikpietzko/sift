@@ -7,8 +7,9 @@
 workspace layout, code conventions per screen) live in [`web/README.md`](../../web/README.md); this page covers
 the component's role, contract, deployment and operations.
 
-Status: complete for this iteration — login, repositories, live runs dashboard with trigger/cancel, review
-results viewer, image and manifests. Browser end-to-end tests and the VSCode/IntelliJ plugins are follow-ups.
+Status: complete for this iteration — login, repositories, live runs dashboard with trigger/revise/cancel,
+review results viewer, image and manifests. Browser end-to-end tests and the VSCode/IntelliJ plugins are
+follow-ups.
 
 ## Responsibilities
 
@@ -18,7 +19,7 @@ results viewer, image and manifests. Browser end-to-end tests and the VSCode/Int
 | HTTP client | `packages/api-client/src/client.ts`, `errors.ts` | `createSiftClient({ baseUrl, getAccessToken, onUnauthorized })` — `openapi-fetch` with a middleware that attaches `Authorization: Bearer …`; every non-2xx response is thrown as `SiftApiError { status, problem: ProblemDetail }` (`isConflict`, `isNotFound`, …). |
 | Live updates | `packages/api-client/src/sse.ts` | `watchAgentRuns(client, { signal, query, onEvent })` reads `GET /api/v1/agents/watch` through `fetch` + `ReadableStream` (a native `EventSource` cannot send the bearer header), parses `id:`/`event:`/multi-line `data:`/`:heartbeat` frames, reconnects with `Last-Event-ID` and a freshly resolved token, and stops on abort or a definitive 400/403/404. |
 | Authentication | `apps/web/src/auth/` | `AuthProvider` bootstraps from the anonymous `GET /api/v1/auth/config`, runs authorization code + PKCE with `oidc-client-ts` (`redirect_uri` = `<origin>/callback`, silent renew, session storage) and installs token provider + 401 handler on the client singleton; `RequireAuth` guards every route below `_authenticated`; the header shows `GET /api/v1/me`. Only the user's own access token ever reaches the browser. |
-| Screens | `apps/web/src/routes`, `features/*`, `api/hooks/*` | `/runs` (filterable, paginated, live via SSE; "Start review" dialog with 40-hex SHA validation → 202 → detail), `/runs/$runId` (spec, phase/reason/message, timestamps, creator or "external", cancel disabled for terminal phases, link to the result), `/repositories` (CRUD, write-only token with `hasToken` badge, clear token, inline 400/409 problem details), `/results` (filters `repositoryUrl`/`commitSha`/`agentRunId`), `/results/$resultId` (Markdown summary, findings grouped by file with severity badges, server-side `severity`/`file` filters). |
+| Screens | `apps/web/src/routes`, `features/*`, `api/hooks/*` | `/runs` (filterable, paginated, live via SSE; shared `run-form-dialog` in `create` mode — "Start review", 40-hex SHA validation → 202 → detail — and in `edit` mode → `PUT` → 201 → "Review revised" toast → successor detail; the row's edit action is disabled for `EXTERNAL` runs), `/runs/$runId` (spec, phase/reason/message, timestamps, creator or "external", edit and cancel, cancel disabled for terminal phases, "Revisions" card linking the superseded predecessor/successor, link to the run's stored result even once its `CodeReview` is gone), `/repositories` (CRUD, write-only token with `hasToken` badge, clear token, inline 400/409 problem details), `/results` (filters `repositoryUrl`/`commitSha`/`agentRunId`), `/results/$resultId` (Markdown summary, findings grouped by file with severity badges, server-side `severity`/`file` filters). |
 | Serving | `apps/web/Dockerfile`, `apps/web/nginx.conf` | `sift-web` image: SPA with history fallback, `/api/` and `/v3/api-docs` proxied unbuffered to `SIFT_SERVER_UPSTREAM`, immutable caching for `/assets/`, `/healthz` for probes. |
 
 Stack: React 19, Vite, TypeScript 5.9, Tailwind CSS v4 + shadcn/ui (Radix primitives), TanStack Router
@@ -116,7 +117,8 @@ must be valid from the user's machine, not only from inside the cluster).
 ## Verification
 
 - `pnpm check` in `web/`: `generate:check`, ESLint, Prettier, `tsc`, Vitest (api-client SSE parser and error
-  mapping; per-screen component tests with MSW), `vite build`. Not part of `./kotlin check`.
+  mapping; per-screen component tests with MSW, including the revise flow from both the runs table and the run
+  detail page and the revision-lineage/result links), `vite build`. Not part of `./kotlin check`.
 - Contract pair: `./kotlin check` fails on server/spec drift, `pnpm generate:check` on spec/types drift.
 - Image smoke test: `docker run --read-only --tmpfs /tmp:uid=101,gid=101 --cap-drop ALL …` then
   `curl /healthz` (200), `curl /runs/any` (200, `index.html`, `no-cache`), an `/assets/*.js` URL (`immutable`),

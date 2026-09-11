@@ -62,6 +62,7 @@ class AgentRunRepository {
             it[completedAt] = run.completedAt
             it[observedAt] = run.observedAt
             it[updatedAt] = run.updatedAt
+            it[supersedesRunId] = run.supersedesRunId?.toKotlinUuid()
         }
         return run
     }
@@ -107,8 +108,22 @@ class AgentRunRepository {
     fun delete(id: UUID): Boolean =
         AgentRunsTable.deleteWhere { AgentRunsTable.id eq id.toKotlinUuid() } == 1
 
-    fun findById(id: UUID): AgentRun? =
-        runsWithCreator.selectAll().where { AgentRunsTable.id eq id.toKotlinUuid() }.singleOrNull()?.toAgentRun()
+    /** Resolves the revision lineage as well, so callers see both directions of the link. */
+    fun findById(id: UUID): AgentRun? = runsWithCreator.selectAll()
+        .where { AgentRunsTable.id eq id.toKotlinUuid() }
+        .singleOrNull()
+        ?.toAgentRun()
+        ?.copy(supersededByRunId = findSupersededBy(id))
+
+    /** The id of the run that revises [id], if any; the inverse of `supersedes_run_id`. */
+    fun findSupersededBy(id: UUID): UUID? = AgentRunsTable
+        .select(AgentRunsTable.id)
+        .where { AgentRunsTable.supersedesRunId eq id.toKotlinUuid() }
+        .orderBy(AgentRunsTable.createdAt, SortOrder.DESC)
+        .limit(1)
+        .firstOrNull()
+        ?.get(AgentRunsTable.id)
+        ?.toJavaUuid()
 
     fun findByCrUid(crUid: String): AgentRun? =
         runsWithCreator.selectAll().where { AgentRunsTable.crUid eq crUid }.singleOrNull()?.toAgentRun()
@@ -190,4 +205,5 @@ private fun ResultRow.toAgentRun(): AgentRun = AgentRun(
     createdBy = this[AgentRunsTable.createdBy]?.let { userId ->
         RunCreator(id = userId.toJavaUuid(), username = this[UsersTable.username])
     },
+    supersedesRunId = this[AgentRunsTable.supersedesRunId]?.toJavaUuid(),
 )

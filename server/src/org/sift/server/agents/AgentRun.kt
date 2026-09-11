@@ -51,6 +51,10 @@ data class AgentRun(
     val updatedAt: OffsetDateTime,
     /** The user who requested the run through the API; `null` for `EXTERNAL` runs. */
     val createdBy: RunCreator? = null,
+    /** The run this one revises; `null` unless the run was created through the revise endpoint. */
+    val supersedesRunId: UUID? = null,
+    /** Derived by lookup, never persisted: the run that revises this one. */
+    val supersededByRunId: UUID? = null,
 )
 
 /** Denormalised view of the `users` row behind `agent_runs.created_by`. */

@@ -29,6 +29,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import tools.jackson.databind.json.JsonMapper
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -248,6 +249,71 @@ class AgentRunControllerTest {
         }
         mockMvc.get("/api/v1/agents?mine=maybe") { with(user) }.andExpect { status { isBadRequest() } }
         verify(exactly = 1) { service.list(AgentRunFilter(createdBy = other), any(), any()) }
+    }
+
+    @Test
+    fun `PUT revises a run and returns 201 with the successor and its location`() {
+        val successorId = UUID.fromString("3c4d5e6f-7081-4923-a456-7890abcdef12")
+        val expected = UpdateAgentRunRequest(
+            repositoryId = repositoryId,
+            branch = "feature/y",
+            baseBranch = "main",
+            commitSha = sha,
+            pullRequest = null,
+        )
+        every { service.revise(id, expected, TestUsers.alice) } returns
+            run.copy(id = successorId, crName = "cr-$successorId", supersedesRunId = id)
+
+        mockMvc.put("/api/v1/agents/$id") {
+            with(user)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"repositoryId":"$repositoryId","branch":"feature/y","baseBranch":"main","commitSha":"$sha"}"""
+        }.andExpect {
+            status { isCreated() }
+            header { string("Location", "http://localhost/api/v1/agents/$successorId") }
+            jsonPath("$.id") { value(successorId.toString()) }
+            jsonPath("$.supersedesRunId") { value(id.toString()) }
+        }
+    }
+
+    @Test
+    fun `PUT validates the body and maps missing runs and EXTERNAL runs to 404 and 409`() {
+        val valid = """{"repositoryId":"$repositoryId","branch":"feature/y","baseBranch":"main","commitSha":"$sha"}"""
+        listOf(
+            valid.replace(sha, "abc"),
+            valid.replace("feature/y", ""),
+            """{not json""",
+        ).forEach { invalid ->
+            mockMvc.put("/api/v1/agents/$id") {
+                with(user)
+                contentType = MediaType.APPLICATION_JSON
+                content = invalid
+            }.andExpect {
+                status { isBadRequest() }
+                content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+            }
+        }
+        verify(exactly = 0) { service.revise(any(), any(), any()) }
+
+        every { service.revise(id, any(), any()) } throws NotFoundException("Agent run $id not found")
+        mockMvc.put("/api/v1/agents/$id") {
+            with(user)
+            contentType = MediaType.APPLICATION_JSON
+            content = valid
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.detail") { value("Agent run $id not found") }
+        }
+
+        every { service.revise(id, any(), any()) } throws ConflictException("cannot be revised")
+        mockMvc.put("/api/v1/agents/$id") {
+            with(user)
+            contentType = MediaType.APPLICATION_JSON
+            content = valid
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.detail") { value("cannot be revised") }
+        }
     }
 
     @Test

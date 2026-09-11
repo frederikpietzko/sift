@@ -225,6 +225,32 @@ export function sseConnection() {
   }
 }
 
+export const SUCCESSOR_RUN_ID = '7d1e0a4c-dddd-4b1e-8f00-000000000004'
+
+/** Mirrors `AgentRunService.revise`: a fresh `CREATED` run that supersedes the edited one. */
+export function revisionOf(
+  run: AgentRunResponse,
+  body: Record<string, unknown> = {},
+): AgentRunResponse {
+  return {
+    ...run,
+    id: SUCCESSOR_RUN_ID,
+    phase: 'CREATED',
+    reason: null,
+    message: null,
+    supersedesRunId: run.id,
+    supersededByRunId: null,
+    repositoryId: (body.repositoryId as string | undefined) ?? run.repositoryId,
+    spec: {
+      repositoryUrl: run.spec?.repositoryUrl,
+      branch: body.branch ?? run.spec?.branch,
+      baseBranch: body.baseBranch ?? run.spec?.baseBranch,
+      commitSha: body.commitSha ?? run.spec?.commitSha,
+      pullRequest: body.pullRequest ?? run.spec?.pullRequest ?? null,
+    },
+  }
+}
+
 /** Responds like the server's `ApiExceptionHandler`: RFC 9457 problem details. */
 export function problemResponse(status: number, problem: Omit<ProblemDetail, 'status'>) {
   return HttpResponse.json<ProblemDetail>(
@@ -265,13 +291,34 @@ export const defaultHandlers = [
     if (!run) return problemResponse(404, { title: 'Not Found', detail: 'Run not found' })
     return requireBearer(request) ?? HttpResponse.json(run)
   }),
+  // revise: the server answers 201 with the successor run that supersedes the edited one
+  http.put(`${API_ORIGIN}/api/v1/agents/:id`, async ({ request, params }) => {
+    const run = runFixtures.find((candidate) => candidate.id === params.id)
+    if (!run) return problemResponse(404, { title: 'Not Found', detail: 'Run not found' })
+    if (run.source === 'EXTERNAL')
+      return problemResponse(409, { title: 'Conflict', detail: 'External runs cannot be revised' })
+    const body = (await request.json()) as Record<string, unknown>
+    const successor = revisionOf(run, body)
+    return (
+      requireBearer(request) ??
+      HttpResponse.json(successor, {
+        status: 201,
+        headers: { location: `/api/v1/agents/${successor.id as string}` },
+      })
+    )
+  }),
   http.delete(`${API_ORIGIN}/api/v1/agents/:id`, ({ request, params }) => {
     const run = runFixtures.find((candidate) => candidate.id === params.id)
     if (!run) return problemResponse(404, { title: 'Not Found', detail: 'Run not found' })
     return requireBearer(request) ?? new HttpResponse(null, { status: 204 })
   }),
   http.get(`${API_ORIGIN}/api/v1/results`, ({ request }) => {
-    return requireBearer(request) ?? HttpResponse.json(pageOf([]))
+    const agentRunId = new URL(request.url).searchParams.get('agentRunId')
+    // only the run-scoped lookup is served from fixtures; the list screen stubs its own handler
+    const items = agentRunId
+      ? resultSummaryFixtures.filter((summary) => summary.agentRunId === agentRunId)
+      : []
+    return requireBearer(request) ?? HttpResponse.json(pageOf(items))
   }),
   http.get(`${API_ORIGIN}/api/v1/results/:id`, ({ request, params }) => {
     if (params.id !== resultFixture.id)

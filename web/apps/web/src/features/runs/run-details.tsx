@@ -1,4 +1,5 @@
 import type { AgentRunResponse } from '@sift/api-client'
+import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,6 +14,7 @@ interface RunDetailsProps {
 
 export function RunDetails({ run, repositoryName }: RunDetailsProps) {
   const spec = readCodeReviewSpec(run)
+  const revised = Boolean(run.supersedesRunId ?? run.supersededByRunId)
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
@@ -90,6 +92,24 @@ export function RunDetails({ run, repositoryName }: RunDetailsProps) {
         </CardContent>
       </Card>
 
+      {revised && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Revisions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DetailList>
+              <Detail label="Supersedes" mono>
+                <RunLink id={run.supersedesRunId} />
+              </Detail>
+              <Detail label="Superseded by" mono>
+                <RunLink id={run.supersededByRunId} />
+              </Detail>
+            </DetailList>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Kubernetes</CardTitle>
@@ -127,6 +147,16 @@ function Detail({ label, mono, children }: { label: string; mono?: boolean; chil
         {children}
       </dd>
     </>
+  )
+}
+
+/** Link to another run of the same revision chain; the target keeps its own results. */
+function RunLink({ id }: { id: string | null | undefined }) {
+  if (!id) return <>—</>
+  return (
+    <Link to="/runs/$runId" params={{ runId: id }} className="underline underline-offset-4">
+      {id}
+    </Link>
   )
 }
 

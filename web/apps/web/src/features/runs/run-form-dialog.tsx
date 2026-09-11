@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
-import { useCreateAgentRun } from '@/api/hooks/agents'
+import { useCreateAgentRun, useUpdateAgentRun } from '@/api/hooks/agents'
 import { useRepositories } from '@/api/hooks/repositories'
 import { ApiErrorAlert } from '@/components/form/api-error-alert'
 import { FormField } from '@/components/form/form-field'
@@ -22,16 +22,24 @@ import { NativeSelect } from '@/components/ui/native-select'
 import {
   startReviewSchema,
   toCreateAgentRunRequest,
+  toUpdateAgentRunRequest,
   type StartReviewFormValues,
 } from '@/features/runs/run-schema'
+import { readCodeReviewSpec } from '@/features/runs/run-spec'
 
-interface StartReviewDialogProps {
+export type RunFormMode = 'create' | 'edit'
+
+interface RunFormDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Pre-selects a repository (e.g. from the active list filter). */
+  /** `create` starts a new run, `edit` revises `run` into a successor run. */
+  mode?: RunFormMode
+  /** Pre-selects a repository (e.g. from the active list filter); create mode only. */
   defaultRepositoryId?: string
-  /** Called after the server accepted the run (202). */
-  onCreated: (run: AgentRunResponse) => void
+  /** The run being revised; required in `edit` mode. */
+  run?: AgentRunResponse | null
+  /** Called with the created run (202) resp. the successor run of a revision (201). */
+  onSubmitted: (run: AgentRunResponse) => void
 }
 
 const EMPTY_VALUES: StartReviewFormValues = {
@@ -42,14 +50,35 @@ const EMPTY_VALUES: StartReviewFormValues = {
   pullRequest: '',
 }
 
-export function StartReviewDialog({
+/** Prefills the form from the run's `CodeReviewRunSpec` so an edit only changes what the user types. */
+function valuesOf(run: AgentRunResponse): StartReviewFormValues {
+  const spec = readCodeReviewSpec(run)
+  return {
+    repositoryId: run.repositoryId ?? '',
+    branch: spec.branch ?? '',
+    baseBranch: spec.baseBranch ?? '',
+    commitSha: spec.commitSha ?? '',
+    pullRequest: spec.pullRequest ?? '',
+  }
+}
+
+/**
+ * Shared create/edit form for code review runs. Runs are immutable, so "edit" is a revision:
+ * the server creates a successor run that supersedes the edited one.
+ */
+export function RunFormDialog({
   open,
   onOpenChange,
+  mode = 'create',
   defaultRepositoryId,
-  onCreated,
-}: StartReviewDialogProps) {
+  run,
+  onSubmitted,
+}: RunFormDialogProps) {
+  const editing = mode === 'edit'
   const repositories = useRepositories()
   const create = useCreateAgentRun()
+  const update = useUpdateAgentRun()
+  const mutation = editing ? update : create
   const form = useForm<StartReviewFormValues>({
     resolver: zodResolver(startReviewSchema),
     defaultValues: { ...EMPTY_VALUES, repositoryId: defaultRepositoryId ?? '' },
@@ -57,37 +86,52 @@ export function StartReviewDialog({
 
   useEffect(() => {
     if (!open) return
-    form.reset({ ...EMPTY_VALUES, repositoryId: defaultRepositoryId ?? '' })
+    form.reset(
+      editing && run ? valuesOf(run) : { ...EMPTY_VALUES, repositoryId: defaultRepositoryId ?? '' },
+    )
     create.reset()
+    update.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the dialog opens
   }, [open])
 
   const onSubmit = form.handleSubmit(async (values) => {
     try {
-      const run = await create.mutateAsync(toCreateAgentRunRequest(values))
-      toast.success('Review started')
-      onOpenChange(false)
-      onCreated(run)
+      if (editing) {
+        const id = run?.id
+        if (!id) return
+        const successor = await update.mutateAsync({ id, body: toUpdateAgentRunRequest(values) })
+        toast.success('Review revised')
+        onOpenChange(false)
+        onSubmitted(successor)
+      } else {
+        const created = await create.mutateAsync(toCreateAgentRunRequest(values))
+        toast.success('Review started')
+        onOpenChange(false)
+        onSubmitted(created)
+      }
     } catch {
-      // surfaced inline via create.error
+      // surfaced inline via mutation.error
     }
   })
 
   const repositoryList = repositories.data ?? []
   const noRepositories = repositories.isSuccess && repositoryList.length === 0
+  const submitLabel = editing ? 'Save & re-run' : 'Start review'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <form onSubmit={onSubmit} noValidate className="grid gap-4">
           <DialogHeader>
-            <DialogTitle>Start review</DialogTitle>
+            <DialogTitle>{editing ? 'Edit review' : 'Start review'}</DialogTitle>
             <DialogDescription>
-              Runs a code review of the given commit and compares the branch against its base.
+              {editing
+                ? 'Runs are immutable: saving starts a new run that supersedes this one. The previous run and its result stay available.'
+                : 'Runs a code review of the given commit and compares the branch against its base.'}
             </DialogDescription>
           </DialogHeader>
 
-          <ApiErrorAlert error={create.error ?? repositories.error} />
+          <ApiErrorAlert error={mutation.error ?? repositories.error} />
 
           <FormField
             label="Repository"
@@ -176,8 +220,8 @@ export function StartReviewDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={create.isPending || noRepositories}>
-              {create.isPending ? 'Starting…' : 'Start review'}
+            <Button type="submit" disabled={mutation.isPending || noRepositories}>
+              {mutation.isPending ? (editing ? 'Saving…' : 'Starting…') : submitLabel}
             </Button>
           </DialogFooter>
         </form>

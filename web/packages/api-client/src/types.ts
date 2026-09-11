@@ -12,6 +12,7 @@ export type AgentPhase = NonNullable<AgentRunResponse['phase']>
 export type RunSource = NonNullable<AgentRunResponse['source']>
 export type RunCreatorResponse = Schemas['RunCreatorResponse']
 export type CreateAgentRunRequest = Schemas['CreateAgentRunRequest']
+export type UpdateAgentRunRequest = Schemas['UpdateAgentRunRequest']
 export type PageResponseAgentRunResponse = Schemas['PageResponseAgentRunResponse']
 
 export type AuthConfigResponse = Schemas['AuthConfigResponse']

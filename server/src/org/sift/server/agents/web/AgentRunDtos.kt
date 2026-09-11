@@ -20,6 +20,26 @@ data class CreateAgentRunRequest(
     val pullRequest: String? = null,
 )
 
+/**
+ * Revised parameters of an existing run. The kind is taken from the run being revised, so it cannot be changed.
+ */
+data class UpdateAgentRunRequest(
+    val repositoryId: UUID,
+    @field:NotBlank val branch: String,
+    @field:NotBlank val baseBranch: String,
+    @field:Pattern(regexp = "^[0-9a-fA-F]{40}$") val commitSha: String,
+    val pullRequest: String? = null,
+) {
+    fun toCreateRequest(kind: AgentKind): CreateAgentRunRequest = CreateAgentRunRequest(
+        kind = kind,
+        repositoryId = repositoryId,
+        branch = branch,
+        baseBranch = baseBranch,
+        commitSha = commitSha,
+        pullRequest = pullRequest,
+    )
+}
+
 /** What is persisted in `agent_runs.spec` for a `CODE_REVIEW` run. */
 data class CodeReviewRunSpec(
     val repositoryUrl: String,
@@ -53,6 +73,10 @@ data class AgentRunResponse(
     val updatedAt: OffsetDateTime,
     /** Absent (`null`) for `EXTERNAL` runs. */
     val createdBy: RunCreatorResponse?,
+    /** The run this one revises; `null` for runs that were not created by revising another run. */
+    val supersedesRunId: UUID?,
+    /** The run that revises this one; `null` while this run is the latest revision. */
+    val supersededByRunId: UUID?,
 ) {
     companion object {
         fun from(run: AgentRun): AgentRunResponse = AgentRunResponse(
@@ -73,6 +97,8 @@ data class AgentRunResponse(
             completedAt = run.completedAt,
             updatedAt = run.updatedAt,
             createdBy = run.createdBy?.let { RunCreatorResponse(id = it.id, username = it.username) },
+            supersedesRunId = run.supersedesRunId,
+            supersededByRunId = run.supersededByRunId,
         )
     }
 }

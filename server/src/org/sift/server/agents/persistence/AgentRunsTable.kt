@@ -37,12 +37,15 @@ object AgentRunsTable : Table("agent_runs") {
     val updatedAt = timestampWithTimeZone("updated_at")
     /** `null` for `EXTERNAL` runs that were first seen through a status event rather than requested via the API. */
     val createdBy = uuid("created_by").nullable()
+    /** Self reference to the predecessor of a revised run; `on delete set null` in the Flyway schema. */
+    val supersedesRunId = uuid("supersedes_run_id").nullable()
 
     override val primaryKey = PrimaryKey(id)
 
     init {
         index(customIndexName = "agent_runs_phase", isUnique = false, phase, createdAt)
         index(customIndexName = "agent_runs_created_by", isUnique = false, createdBy, createdAt)
+        index(customIndexName = "agent_runs_supersedes_run_id", isUnique = false, supersedesRunId)
     }
 }
 

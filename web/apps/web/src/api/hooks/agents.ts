@@ -6,6 +6,7 @@ import {
   type AgentWatchQuery,
   type CreateAgentRunRequest,
   type PageResponseAgentRunResponse,
+  type UpdateAgentRunRequest,
 } from '@sift/api-client'
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
@@ -54,6 +55,30 @@ export function useCreateAgentRun() {
     onSuccess: (run) => {
       if (run?.id) queryClient.setQueryData(queryKeys.agents.detail(run.id), run)
       return queryClient.invalidateQueries({ queryKey: queryKeys.agents.all })
+    },
+  })
+}
+
+/**
+ * Revises a run: the server starts the edited spec as a new run that supersedes the old one.
+ * The successor lands in its detail cache, the predecessor is refetched (it is now cancelled and
+ * carries `supersededByRunId`) and every cached list is refreshed. SSE updates for either run keep
+ * working because both are patched through the regular detail/list caches.
+ */
+export function useUpdateAgentRun() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: UpdateAgentRunRequest }) => {
+      const { data } = await siftClient.PUT('/api/v1/agents/{id}', {
+        params: { path: { id } },
+        body,
+      })
+      return data as AgentRunResponse
+    },
+    onSuccess: async (run, { id }) => {
+      if (run?.id) queryClient.setQueryData(queryKeys.agents.detail(run.id), run)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(id) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.all })
     },
   })
 }

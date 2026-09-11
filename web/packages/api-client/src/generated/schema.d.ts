@@ -50,7 +50,11 @@ export type paths = {
         };
         /** Get an agent run */
         get: operations["agentRunGet"];
-        put?: never;
+        /**
+         * Revise an agent run
+         * @description Runs are immutable: the edited spec is started as a new run that supersedes this one. The predecessor keeps its row, review result and findings; its `CodeReview` is removed when still active.
+         */
+        put: operations["agentRunUpdate"];
         post?: never;
         /**
          * Delete an agent run
@@ -248,6 +252,10 @@ export type components = {
             };
             /** Format: date-time */
             startedAt?: string | null;
+            /** Format: uuid */
+            supersededByRunId?: string | null;
+            /** Format: uuid */
+            supersedesRunId?: string | null;
             /** Format: date-time */
             updatedAt?: string;
         };
@@ -371,6 +379,14 @@ export type components = {
             /** Format: uuid */
             id?: string;
             username?: string;
+        };
+        UpdateAgentRunRequest: {
+            baseBranch: string;
+            branch: string;
+            commitSha?: string;
+            pullRequest?: string | null;
+            /** Format: uuid */
+            repositoryId?: string;
         };
         UpdateRepositoryRequest: {
             clearToken?: boolean;
@@ -567,6 +583,68 @@ export interface operations {
             };
             /** @description Run not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    agentRunUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAgentRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successor run created; `Location` points at it */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunResponse"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Missing or invalid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Run or repository not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Run was not created through the API and cannot be revised */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

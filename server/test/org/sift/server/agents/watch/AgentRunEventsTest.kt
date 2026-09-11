@@ -79,6 +79,8 @@ class AgentRunEventsTest {
             completedAt = null,
             updatedAt = updatedAt,
             createdBy = null,
+            supersedesRunId = null,
+            supersededByRunId = null,
         )
     }
 }

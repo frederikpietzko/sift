@@ -1,4 +1,9 @@
-import { AGENT_PHASES, type AgentPhase, type CreateAgentRunRequest } from '@sift/api-client'
+import {
+  AGENT_PHASES,
+  type AgentPhase,
+  type CreateAgentRunRequest,
+  type UpdateAgentRunRequest,
+} from '@sift/api-client'
 import { z } from 'zod'
 
 export const COMMIT_SHA_PATTERN = /^[0-9a-fA-F]{40}$/
@@ -22,6 +27,17 @@ export type StartReviewFormValues = z.infer<typeof startReviewSchema>
 export function toCreateAgentRunRequest(values: StartReviewFormValues): CreateAgentRunRequest {
   return {
     kind: 'CODE_REVIEW',
+    repositoryId: values.repositoryId,
+    branch: values.branch.trim(),
+    baseBranch: values.baseBranch.trim(),
+    commitSha: values.commitSha.trim().toLowerCase(),
+    pullRequest: values.pullRequest.trim() || null,
+  }
+}
+
+/** Revision body of `PUT /api/v1/agents/{id}`: same fields as create, without `kind`. */
+export function toUpdateAgentRunRequest(values: StartReviewFormValues): UpdateAgentRunRequest {
+  return {
     repositoryId: values.repositoryId,
     branch: values.branch.trim(),
     baseBranch: values.baseBranch.trim(),

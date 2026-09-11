@@ -1,6 +1,6 @@
 import type { AgentRunResponse, PageResponseAgentRunResponse } from '@sift/api-client'
-import { Link } from '@tanstack/react-router'
-import { ChevronLeftIcon, ChevronRightIcon, Trash2Icon } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { ChevronLeftIcon, ChevronRightIcon, PencilIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/table'
 import { DeleteRunDialog, runLabel } from '@/features/runs/delete-run-dialog'
 import { PhaseBadge } from '@/features/runs/phase-badge'
+import { RunFormDialog } from '@/features/runs/run-form-dialog'
 import { creatorLabel, kindLabel, readCodeReviewSpec, shortSha } from '@/features/runs/run-spec'
 import { formatDateTime } from '@/lib/format'
 
@@ -23,8 +24,15 @@ interface RunTableProps {
   repositoryNames?: ReadonlyMap<string, string>
 }
 
+/** `EXTERNAL` runs are not owned by the API (no repository id), so they cannot be revised. */
+function canEdit(run: AgentRunResponse): boolean {
+  return Boolean(run.id) && run.source !== 'EXTERNAL'
+}
+
 export function RunTable({ runs, repositoryNames }: RunTableProps) {
+  const navigate = useNavigate()
   const [pendingDelete, setPendingDelete] = useState<AgentRunResponse | null>(null)
+  const [pendingEdit, setPendingEdit] = useState<AgentRunResponse | null>(null)
 
   return (
     <div className="overflow-hidden rounded-lg border">
@@ -87,7 +95,19 @@ export function RunTable({ runs, repositoryNames }: RunTableProps) {
                 <TableCell className="text-muted-foreground whitespace-nowrap">
                   <time dateTime={run.updatedAt ?? undefined}>{formatDateTime(run.updatedAt)}</time>
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell className="space-x-1 text-right whitespace-nowrap">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Edit run ${runLabel(run)}`}
+                    title={
+                      canEdit(run) ? undefined : 'External runs are not managed through the API'
+                    }
+                    disabled={!canEdit(run)}
+                    onClick={() => setPendingEdit(run)}
+                  >
+                    <PencilIcon />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -107,6 +127,16 @@ export function RunTable({ runs, repositoryNames }: RunTableProps) {
         open={pendingDelete !== null}
         onOpenChange={(open) => !open && setPendingDelete(null)}
         run={pendingDelete}
+      />
+      <RunFormDialog
+        open={pendingEdit !== null}
+        onOpenChange={(open) => !open && setPendingEdit(null)}
+        mode="edit"
+        run={pendingEdit}
+        onSubmitted={(run) => {
+          setPendingEdit(null)
+          if (run?.id) void navigate({ to: '/runs/$runId', params: { runId: run.id } })
+        }}
       />
     </div>
   )

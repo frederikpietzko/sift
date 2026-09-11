@@ -134,7 +134,17 @@ authenticated `e2e` user (`env.api()`):
    `createdBy` still the `e2e` user.
 5. `GET /api/v1/results?agentRunId=<id>` → `total == 1`, item `commitSha` equals the requested SHA;
    `GET /api/v1/results/{id}` → `summary` is a non-blank string, `findings` is a JSON array (may be
-   empty) and `findingCount` equals its size.
+   empty) and `findingCount` equals its size. The result id is kept for step 8.
+6. `PUT /api/v1/agents/{id}` with the same spec revises the finished run → `201 Created`, a **new** run
+   id in phase `CREATED` whose `supersedesRunId` is the predecessor
+   ([ADR 0019](../adrs/0019-immutable-agent-runs-revised-by-succession.md)).
+7. The successor is watched exactly like step 3 and must also end in `SUCCESS`, proving a revised run
+   is provisioned and executed like any other.
+8. `GET /api/v1/agents/{predecessor}` → `supersededByRunId` is the successor and
+   `GET /api/v1/agents/{successor}` → `supersedesRunId` is the predecessor (both directions resolve);
+   `GET /api/v1/results?agentRunId=<predecessor>` still returns the **same** result id as step 5 and
+   `GET /api/v1/results/{that id}` still serves it, so revising never drops the predecessor's stored
+   result even though its `CodeReview` is gone. The successor's own result is verified as in step 5.
 
 The test is meant to stay green as the product evolves, so it asserts **only stable public
 contracts**: HTTP status codes, phase transitions, presence and shape of the result. It never
@@ -155,9 +165,10 @@ derivation, form encoding, response parsing and expiry margin) always run and ne
 
 Teardown always runs, also when the scenario fails:
 
-- The scenario's `finally` deletes **test data only**: the `CodeReview` CR (`crName` from the run
-  response) and the `sift-repo-<repositoryId>` Secret via fabric8, then the `review_results`,
-  `agent_runs` and `repositories` rows via JDBC (`jdbc:postgresql://localhost:5432/sift`, `sift`/`sift`).
+- The scenario's `finally` deletes **test data only**: the `CodeReview` CRs of both the original and the
+  revised run (`crName` from each run response) and the `sift-repo-<repositoryId>` Secret via fabric8,
+  then the `review_results`, `agent_runs` and `repositories` rows via JDBC
+  (`jdbc:postgresql://localhost:5432/sift`, `sift`/`sift`).
   The `users` row of the `e2e` user is kept (it is upserted on the next request anyway;
   `agent_runs.created_by` references it, so runs must always be deleted before users).
 - `SiftEnvironment` stops the server and operator JVMs (most recent first) including all

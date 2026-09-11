@@ -249,6 +249,25 @@ class AgentRunRepositoryTest : PostgresIntegrationTest() {
         assertFalse(runs.hasActiveRuns(UUID.randomUUID()))
     }
 
+    @Test
+    fun `revision lineage is persisted resolved in both directions and cleared when the predecessor is deleted`() {
+        val repository = repository("lineage")
+        val predecessor = runs.insert(run(repository.id, AgentPhase.CANCELLED, createdAt = now.minusHours(1)))
+        val successor = runs.insert(
+            run(repository.id, AgentPhase.CREATED, createdAt = now).copy(supersedesRunId = predecessor.id),
+        )
+
+        assertEquals(predecessor.id, assertNotNull(runs.findById(successor.id)).supersedesRunId)
+        assertNull(assertNotNull(runs.findById(successor.id)).supersededByRunId)
+        assertEquals(successor.id, assertNotNull(runs.findById(predecessor.id)).supersededByRunId)
+        assertEquals(successor.id, runs.findSupersededBy(predecessor.id))
+        assertNull(runs.findSupersededBy(successor.id))
+
+        assertTrue(runs.delete(predecessor.id))
+        val orphaned = assertNotNull(runs.findById(successor.id))
+        assertNull(orphaned.supersedesRunId)
+    }
+
     private fun user(username: String): User = users.upsert(
         User(
             id = UUID.randomUUID(),

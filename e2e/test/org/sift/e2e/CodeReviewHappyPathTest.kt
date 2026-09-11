@@ -17,7 +17,8 @@ import kotlin.time.toJavaDuration
 
 /**
  * The one happy path, driven purely through the server's public API against the real stack booted by
- * [SiftEnvironment]: repository → `CODE_REVIEW` run → SSE watch to `SUCCESS` → result via REST, all
+ * [SiftEnvironment]: repository → `CODE_REVIEW` run → SSE watch to `SUCCESS` → result via REST →
+ * revise into a successor run that reaches `SUCCESS` while the predecessor's result stays readable, all
  * authenticated as the Keycloak `e2e` user. Assertions are limited to stable contracts (status codes,
  * phase transitions, run attribution, presence/shape of the result); nothing about the LLM output,
  * timings or intermediate resource names is checked.
@@ -33,6 +34,7 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
     fun `a code review requested through the API runs on the cluster and yields a result`() {
         val spec = SamplePullRequest.resolve()
         var crName: String? = null
+        var successorCrName: String? = null
         var repositoryId: String? = null
         try {
             repositoryId = createRepository(spec)
@@ -48,10 +50,54 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
             assertEquals(1, outcome.phases.count { it in RunObserver.terminalPhases }, "terminal phase must be final")
 
             verifyRun(runId, crUid)
-            verifyResult(runId, spec)
+            val resultId = verifyResult(runId, spec)
+
+            val successor = revise(runId, repositoryId, spec)
+            successorCrName = successor.path("crName").asString()
+            val successorId = successor.path("id").asString()
+            assertEquals(runId, successor.path("supersedesRunId").asString(), successor.toString())
+
+            val successorOutcome = watchUntilSuccess(successorId)
+            assertEquals(RunObserver.SUCCESS, successorOutcome.phases.last())
+
+            verifyLineage(predecessorId = runId, successorId = successorId)
+            verifyRetainedResult(runId, resultId, spec)
+            verifyResult(successorId, spec)
         } finally {
-            cleanUp(crName, repositoryId)
+            cleanUp(listOfNotNull(crName, successorCrName), repositoryId)
         }
+    }
+
+    /** `PUT /api/v1/agents/{id}` starts the edited spec as a new run instead of mutating the finished one. */
+    private fun revise(runId: String, repositoryId: String, spec: ReviewSpec): JsonNode {
+        val body = """
+            {"repositoryId":"$repositoryId","branch":"${spec.branch}",
+             "baseBranch":"${spec.baseBranch}","commitSha":"${spec.commitSha}","pullRequest":"${spec.pullRequest}"}
+        """.trimIndent()
+        val response = api.put("/api/v1/agents/$runId", body)
+        assertEquals(ServerApi.HTTP_CREATED, response.status, response.rawBody)
+        val successor = response.json()
+        assertEquals("CREATED", successor.path("phase").asString())
+        assertFalse(successor.path("id").asString() == runId, "revision must create a new run")
+        println("Revised run $runId as ${successor.path("id").asString()}")
+        return successor
+    }
+
+    /** Both directions of the chain are readable: the predecessor points forward, the successor backward. */
+    private fun verifyLineage(predecessorId: String, successorId: String) {
+        val predecessor = api.getJson("/api/v1/agents/$predecessorId")
+        assertEquals(successorId, predecessor.path("supersededByRunId").asString(), predecessor.toString())
+        val successor = api.getJson("/api/v1/agents/$successorId")
+        assertEquals(predecessorId, successor.path("supersedesRunId").asString(), successor.toString())
+    }
+
+    /** The predecessor's stored result survives the revision even though its `CodeReview` is gone. */
+    private fun verifyRetainedResult(runId: String, resultId: String, spec: ReviewSpec) {
+        val page = api.getJson("/api/v1/results?agentRunId=$runId")
+        assertEquals(1L, page.path("total").asLong(), page.toString())
+        assertEquals(resultId, page.path("items")[0].path("id").asString(), page.toString())
+        val detail = api.getJson("/api/v1/results/$resultId")
+        assertEquals(spec.commitSha, detail.path("commitSha").asString(), detail.toString())
     }
 
     private fun createRepository(spec: ReviewSpec): String {
@@ -104,7 +150,8 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
         assertEquals(Compose.E2E_USER, run.path("createdBy").path("username").asString())
     }
 
-    private fun verifyResult(runId: String, spec: ReviewSpec) {
+    /** Returns the id of the ingested result so later assertions can prove it is the very same row. */
+    private fun verifyResult(runId: String, spec: ReviewSpec): String {
         val page = api.getJson("/api/v1/results?agentRunId=$runId")
         assertEquals(1L, page.path("total").asLong(), page.toString())
         val summary = page.path("items")[0]
@@ -114,10 +161,11 @@ class CodeReviewHappyPathTest(private val env: SiftEnvironment) {
         assertTrue(detail.path("summary").isString && detail.path("summary").asString().isNotBlank())
         assertTrue(detail.path("findings").isArray, "findings must be a JSON array")
         assertEquals(detail.path("findings").size().toLong(), detail.path("findingCount").asLong())
+        return summary.path("id").asString()
     }
 
-    private fun cleanUp(crName: String?, repositoryId: String?) {
-        crName?.takeIf { it.isNotBlank() }?.let { TestData.deleteCodeReview(env.kubernetesClient, it) }
+    private fun cleanUp(crNames: List<String>, repositoryId: String?) {
+        crNames.filter { it.isNotBlank() }.forEach { TestData.deleteCodeReview(env.kubernetesClient, it) }
         repositoryId?.let { TestData.deleteRepositorySecret(env.kubernetesClient, it) }
         val purged = TestData.purgeRows(repositoryName, jdbcUrl = env.jdbcUrl)
         println("Cleaned up $repositoryName ($purged rows)")

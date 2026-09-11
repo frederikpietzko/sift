@@ -28,7 +28,7 @@ class ApplicationTest : PostgresIntegrationTest() {
             "select version from flyway_schema_history where success order by installed_rank",
             String::class.java,
         )
-        assertEquals(listOf("1", "2"), versions)
+        assertEquals(listOf("1", "2", "3"), versions)
     }
 
     @Test

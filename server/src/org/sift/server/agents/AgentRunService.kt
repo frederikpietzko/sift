@@ -5,6 +5,7 @@ import org.sift.server.agents.adapters.AgentKindAdapter
 import org.sift.server.agents.persistence.AgentRunRepository
 import org.sift.server.agents.web.CodeReviewRunSpec
 import org.sift.server.agents.web.CreateAgentRunRequest
+import org.sift.server.agents.web.UpdateAgentRunRequest
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
 import org.sift.server.api.Page
@@ -42,9 +43,21 @@ class AgentRunService(
     private val adapters: Map<AgentKind, AgentKindAdapter> = adapters.associateBy { it.kind }
 
     /** Requests a new run on behalf of [user], who is recorded as its creator. */
-    fun create(request: CreateAgentRunRequest, user: User): AgentRun {
+    fun create(request: CreateAgentRunRequest, user: User): AgentRun = start(request, user, supersedesRunId = null)
+
+    /**
+     * Revises [id]: runs are immutable, so the edited spec is started as a new run that supersedes [id] instead of
+     * mutating it. The predecessor keeps its row, its review result and its findings; only its `CodeReview` CR is
+     * removed when it is still active. Cleanups stay reserved for [delete].
+     */
+    fun revise(id: UUID, request: UpdateAgentRunRequest, user: User): AgentRun {
+        val predecessor = requireNotNull(transactions.execute { supersede(id) })
+        return start(request.toCreateRequest(predecessor.kind), user, supersedesRunId = predecessor.id)
+    }
+
+    private fun start(request: CreateAgentRunRequest, user: User, supersedesRunId: UUID?): AgentRun {
         val adapter = adapterFor(request.kind)
-        val created = transactions.execute { persistCreated(adapter, request, user) }
+        val created = transactions.execute { persistCreated(adapter, request, user, supersedesRunId) }
         val applied = runCatching { adapter.apply(created, request) }.getOrElse { exception ->
             log.warn("Applying {} for run {} failed", request.kind, created.id, exception)
             runCatching {
@@ -167,7 +180,31 @@ class AgentRunService(
         }
     }
 
-    private fun persistCreated(adapter: AgentKindAdapter, request: CreateAgentRunRequest, user: User): AgentRun {
+    /** Detaches the predecessor from the cluster: an active run is cancelled, a terminal one is kept as it is. */
+    private fun supersede(id: UUID): AgentRun {
+        val run = find(id)
+        if (run.source != RunSource.API) {
+            throw ConflictException("Agent run $id was not created through the API and cannot be revised")
+        }
+        if (run.phase.terminal) return run
+        adapterFor(run.kind).delete(run)
+        return runs.update(
+            run.copy(
+                phase = AgentPhase.CANCELLED,
+                reason = REASON_SUPERSEDED,
+                message = null,
+                completedAt = now(),
+                updatedAt = now(),
+            ),
+        )
+    }
+
+    private fun persistCreated(
+        adapter: AgentKindAdapter,
+        request: CreateAgentRunRequest,
+        user: User,
+        supersedesRunId: UUID?,
+    ): AgentRun {
         val repository = repositories.get(request.repositoryId)
         val id = UUID.randomUUID()
         val now = now()
@@ -198,6 +235,7 @@ class AgentRunService(
                 observedAt = null,
                 updatedAt = now,
                 createdBy = RunCreator(id = user.id, username = user.username),
+                supersedesRunId = supersedesRunId,
             ),
         )
     }
@@ -243,6 +281,7 @@ class AgentRunService(
     companion object {
         const val REASON_APPLY_FAILED = "ApplyFailed"
         const val REASON_CANCELLED = "CancelledByUser"
+        const val REASON_SUPERSEDED = "SupersededByRevision"
         const val REASON_RESULT_RECEIVED = "ResultReceived"
         const val MIN_PAGE_SIZE = 1
         const val MAX_PAGE_SIZE = 200

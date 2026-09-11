@@ -1,4 +1,8 @@
-import type { AgentRunResponse, CreateAgentRunRequest } from '@sift/api-client'
+import type {
+  AgentRunResponse,
+  CreateAgentRunRequest,
+  UpdateAgentRunRequest,
+} from '@sift/api-client'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -9,9 +13,11 @@ import {
   API_ORIGIN,
   problemResponse,
   requireBearer,
+  revisionOf,
   runFixtures,
   runPage,
   sseConnection,
+  SUCCESSOR_RUN_ID,
 } from '@/test/handlers'
 import { renderApp } from '@/test/render'
 import { server } from '@/test/server'
@@ -420,6 +426,179 @@ describe('start review dialog', () => {
       'repository has no token',
     )
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('edit run', () => {
+  const editLabel = `Edit run Code review · ${runningRun.spec?.branch as string}`
+  const successor = revisionOf(runningRun)
+
+  /** Serves the successor of a revision from `GET /agents/:id` so navigation can render it. */
+  function serveRevision() {
+    const requests: { id: string; body: UpdateAgentRunRequest }[] = []
+    server.use(
+      http.put(`${API_ORIGIN}/api/v1/agents/:id`, async ({ request, params }) => {
+        const body = (await request.json()) as UpdateAgentRunRequest
+        requests.push({ id: params.id as string, body })
+        return HttpResponse.json(revisionOf(runningRun, body as never), {
+          status: 201,
+          headers: { location: `/api/v1/agents/${SUCCESSOR_RUN_ID}` },
+        })
+      }),
+      http.get(`${API_ORIGIN}/api/v1/agents/:id`, ({ params }) => {
+        if (params.id === SUCCESSOR_RUN_ID) return HttpResponse.json(successor)
+        const run = runFixtures.find((candidate) => candidate.id === params.id)
+        return run ? HttpResponse.json(run) : problemResponse(404, { title: 'Not Found' })
+      }),
+    )
+    return requests
+  }
+
+  it('disables the row action for external runs', async () => {
+    renderRuns()
+
+    const table = await findRunsTable()
+    expect(within(table).getByRole('button', { name: editLabel })).toBeEnabled()
+    expect(
+      within(table).getByRole('button', {
+        name: `Edit run Code review · ${externalRun.spec?.branch as string}`,
+      }),
+    ).toBeDisabled()
+  })
+
+  it('prefills the form from the run and revises it from the table', async () => {
+    const user = userEvent.setup()
+    const requests = serveRevision()
+    const { router } = renderRuns()
+
+    const table = await findRunsTable()
+    await user.click(within(table).getByRole('button', { name: editLabel }))
+    const dialog = await screen.findByRole('dialog')
+
+    expect(within(dialog).getByRole('combobox', { name: 'Repository' })).toHaveValue(
+      runningRun.repositoryId as string,
+    )
+    expect(within(dialog).getByRole('textbox', { name: 'Branch' })).toHaveValue('feature/live-runs')
+    expect(within(dialog).getByRole('textbox', { name: 'Base branch' })).toHaveValue('main')
+    expect(within(dialog).getByRole('textbox', { name: 'Commit SHA' })).toHaveValue(
+      runningRun.spec?.commitSha as string,
+    )
+    expect(within(dialog).getByRole('textbox', { name: /Pull request/ })).toHaveValue('42')
+
+    const sha = within(dialog).getByRole('textbox', { name: 'Commit SHA' })
+    await user.clear(sha)
+    await user.type(sha, VALID_SHA)
+    await user.click(within(dialog).getByRole('button', { name: 'Save & re-run' }))
+
+    await waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]?.id).toBe(runningId)
+    expect(requests[0]?.body).toEqual<UpdateAgentRunRequest>({
+      repositoryId: runningRun.repositoryId as string,
+      branch: 'feature/live-runs',
+      baseBranch: 'main',
+      commitSha: VALID_SHA,
+      pullRequest: '42',
+    })
+    expect(await screen.findByText('Review revised')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/runs/${SUCCESSOR_RUN_ID}`))
+  })
+
+  it('revises from the detail page and navigates to the successor', async () => {
+    const user = userEvent.setup()
+    const requests = serveRevision()
+    const { router } = renderRuns(`/runs/${runningId}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Edit run' }))
+    const dialog = await screen.findByRole('dialog')
+    const branch = within(dialog).getByRole('textbox', { name: 'Branch' })
+    await user.clear(branch)
+    await user.type(branch, 'feature/revised')
+    await user.click(within(dialog).getByRole('button', { name: 'Save & re-run' }))
+
+    await waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]?.body.branch).toBe('feature/revised')
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/runs/${SUCCESSOR_RUN_ID}`))
+    await waitFor(() => expect(phaseBadge()).toHaveAttribute('data-phase', 'CREATED'))
+  })
+
+  it('disables editing on the detail page of an external run', async () => {
+    renderRuns(`/runs/${externalRun.id}`)
+
+    expect(await screen.findByRole('button', { name: 'Edit run' })).toBeDisabled()
+  })
+
+  it('shows the server problem inline when the revision is rejected', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.put(`${API_ORIGIN}/api/v1/agents/:id`, () =>
+        problemResponse(409, { title: 'Conflict', detail: 'Run is not managed by the API' }),
+      ),
+    )
+    renderRuns()
+
+    const table = await findRunsTable()
+    await user.click(within(table).getByRole('button', { name: editLabel }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Save & re-run' }))
+
+    expect(await within(dialog).findByTestId('api-error')).toHaveTextContent(
+      'Run is not managed by the API',
+    )
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('run revisions', () => {
+  const PREDECESSOR_ID = '7d1e0a4c-cccc-4b1e-8f00-000000000003'
+
+  /** Serves one run detail response, whatever the requested id is. */
+  function serveRun(run: AgentRunResponse) {
+    server.use(http.get(`${API_ORIGIN}/api/v1/agents/:id`, () => HttpResponse.json(run)))
+  }
+
+  it('links to the predecessor and the successor of a revised run', async () => {
+    serveRun({
+      ...runningRun,
+      supersedesRunId: PREDECESSOR_ID,
+      supersededByRunId: SUCCESSOR_RUN_ID,
+    })
+    renderRuns(`/runs/${runningId}`)
+
+    expect(await screen.findByText('Revisions')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: PREDECESSOR_ID })).toHaveAttribute(
+      'href',
+      `/runs/${PREDECESSOR_ID}`,
+    )
+    expect(screen.getByRole('link', { name: SUCCESSOR_RUN_ID })).toHaveAttribute(
+      'href',
+      `/runs/${SUCCESSOR_RUN_ID}`,
+    )
+  })
+
+  it('omits the revisions card for a run without lineage', async () => {
+    renderRuns(`/runs/${runningId}`)
+
+    expect(await screen.findByText('Review spec')).toBeInTheDocument()
+    expect(screen.queryByText('Revisions')).not.toBeInTheDocument()
+  })
+
+  it('links to the stored result of a superseded run whose resource is gone', async () => {
+    // the predecessor was cancelled by the revision, but its result is still in the database
+    serveRun({
+      ...externalRun,
+      source: 'API',
+      repositoryId: runningRun.repositoryId,
+      phase: 'CANCELLED',
+      reason: 'SupersededByRevision',
+      crName: undefined,
+      crUid: undefined,
+      supersededByRunId: SUCCESSOR_RUN_ID,
+    })
+    renderRuns(`/runs/${externalRun.id as string}`)
+
+    const link = await screen.findByRole('link', { name: 'View result' })
+    expect(link).toHaveAttribute('href', '/results/9e9e9e9e-0000-4000-8000-000000000009')
   })
 })
 

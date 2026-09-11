@@ -9,9 +9,9 @@ import { ApiErrorAlert } from '@/components/form/api-error-alert'
 import { PageHeader } from '@/components/layout/page-header'
 import { Button } from '@/components/ui/button'
 import { RunFilters, type RunFilterValues } from '@/features/runs/run-filters'
+import { RunFormDialog } from '@/features/runs/run-form-dialog'
 import { runsSearchSchema } from '@/features/runs/run-schema'
 import { Pagination, RunTable } from '@/features/runs/run-table'
-import { StartReviewDialog } from '@/features/runs/start-review-dialog'
 import { WatchStatusIndicator } from '@/features/runs/watch-status'
 
 export const Route = createFileRoute('/_authenticated/runs/')({
@@ -97,11 +97,11 @@ function RunsPage() {
           ))}
       </div>
 
-      <StartReviewDialog
+      <RunFormDialog
         open={startOpen}
         onOpenChange={setStartOpen}
         defaultRepositoryId={filter.repositoryId}
-        onCreated={(run) => {
+        onSubmitted={(run) => {
           if (run?.id) void navigate({ to: '/runs/$runId', params: { runId: run.id } })
         }}
       />

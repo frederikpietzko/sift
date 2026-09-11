@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
@@ -32,7 +33,7 @@ import java.util.UUID
  * Listing accepts `mine=true` (only the caller's runs) or `createdBy=<user id>`; both together are only allowed
  * when they name the same user.
  */
-@Tag(name = "agents", description = "Agent runs: trigger, list, inspect, cancel and delete")
+@Tag(name = "agents", description = "Agent runs: trigger, list, inspect, revise, cancel and delete")
 @RestController
 @RequestMapping("/api/v1/agents")
 class AgentRunController(private val service: AgentRunService) {
@@ -79,6 +80,28 @@ class AgentRunController(private val service: AgentRunService) {
     @ApiResponse(responseCode = "404", description = "Run not found")
     @GetMapping("/{id:$UUID_PATTERN}")
     fun get(@PathVariable id: UUID): AgentRunResponse = AgentRunResponse.from(service.get(id))
+
+    @Operation(
+        summary = "Revise an agent run",
+        description = "Runs are immutable: the edited spec is started as a new run that supersedes this one. " +
+            "The predecessor keeps its row, review result and findings; its `CodeReview` is removed when still active.",
+    )
+    @ApiResponse(responseCode = "201", description = "Successor run created; `Location` points at it")
+    @ApiResponse(responseCode = "400", description = "Validation failed")
+    @ApiResponse(responseCode = "404", description = "Run or repository not found")
+    @ApiResponse(responseCode = "409", description = "Run was not created through the API and cannot be revised")
+    @PutMapping("/{id:$UUID_PATTERN}")
+    fun update(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: UpdateAgentRunRequest,
+        @CurrentUser user: User,
+    ): ResponseEntity<AgentRunResponse> {
+        val run = service.revise(id, request, user)
+        val location = ServletUriComponentsBuilder.fromCurrentRequest()
+            .replacePath("/api/v1/agents/{id}")
+            .build(run.id)
+        return ResponseEntity.created(location).body(AgentRunResponse.from(run))
+    }
 
     @Operation(summary = "Cancel an agent run")
     @ApiResponse(responseCode = "202", description = "Cancellation requested")

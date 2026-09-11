@@ -42,6 +42,7 @@ information, machine-readable, is the [OpenAPI contract](#openapi-contract).
 | `POST` | `/api/v1/agents` | `202` | `400`, `404`, `500` | [Agent runs](#agent-runs-api) |
 | `GET` | `/api/v1/agents` | `200` | `400` | [Agent runs](#agent-runs-api) |
 | `GET` | `/api/v1/agents/{id}` | `200` | `404` | [Agent runs](#agent-runs-api) |
+| `PUT` | `/api/v1/agents/{id}` | `201` | `400`, `404`, `409` | [Agent runs](#agent-runs-api) |
 | `POST` | `/api/v1/agents/{id}/cancel` | `202` | `404`, `409` | [Agent runs](#agent-runs-api) |
 | `DELETE` | `/api/v1/agents/{id}` | `204` | `404` | [Agent runs](#agent-runs-api) |
 | `GET` | `/api/v1/agents/watch` | `200` `text/event-stream` | `400`, `406` | [Watch](#agent-run-watch-sse) |
@@ -103,12 +104,12 @@ no access to another module's internals, only declared dependencies) and renders
 | `src/org/sift/server/repositories/secrets/RepositorySecretSync.kt` | Server-side-applies/deletes the per-repository k8s Secret. |
 | `src/org/sift/server/repositories/web/RepositoryController.kt`, `RepositoryDtos.kt` | `/api/v1/repositories` REST endpoints and request/response DTOs. |
 | `src/org/sift/server/agents/AgentRun.kt` | Domain model (`AgentRun`, `RunCreator`, `AgentKind`, `AgentPhase`, `RunSource`, `AgentRunFilter` incl. `resolveCreatedBy(mine, createdBy, user)`). |
-| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: `create(request, user)` (persist with `createdBy` → apply CR → record uid), get, list, cancel, `applyStatus` upsert from events (`EXTERNAL` runs keep `createdBy = null`), `findByExecutionId` and `completeWithResult` for the `results` module. |
+| `src/org/sift/server/agents/AgentRunService.kt` | Use cases: `create(request, user)` (persist with `createdBy` → apply CR → record uid), `revise(id, request, user)` (insert a successor run linked by `supersedesRunId`, retiring the predecessor's CR without cleaning up its results), get, list, cancel, `applyStatus` upsert from events (`EXTERNAL` runs keep `createdBy = null`), `findByExecutionId` and `completeWithResult` for the `results` module. |
 | `src/org/sift/server/agents/AgentRunRepositoryUsageCheck.kt` | `RepositoryUsageCheck` implementation: vetoes deleting a repository with non-terminal runs. |
 | `src/org/sift/server/agents/adapters/AgentKindAdapter.kt`, `CodeReviewAdapter.kt` | Per-kind bridge to the cluster; `CodeReviewAdapter` builds, creates and foreground-deletes `CodeReview` CRs. |
-| `src/org/sift/server/agents/persistence/AgentRunsTable.kt`, `AgentRunRepository.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3; `repository_id`/`created_by` are plain columns, the FKs live in Flyway) and the blocking repository (insert/update/updateStatus/findById/findByCrUid/findByExecutionId/list/findUpdatedSince/hasActiveRuns; reads left-join `users` for the creator's username). |
+| `src/org/sift/server/agents/persistence/AgentRunsTable.kt`, `AgentRunRepository.kt` | Exposed DSL table for `agent_runs` (`spec` as `jsonb` via Jackson 3; `repository_id`/`created_by`/`supersedes_run_id` are plain columns, the FKs live in Flyway) and the blocking repository (insert/update/updateStatus/findById/findSupersededBy/findByCrUid/findByExecutionId/list/findUpdatedSince/hasActiveRuns; reads left-join `users` for the creator's username and resolve the reverse `supersededByRunId` link). |
 | `src/org/sift/server/agents/messaging/AgentStatusConsumer.kt` | `@RabbitListener` on `sift.server.code-review.status` feeding `AgentRunService.applyStatus`. |
-| `src/org/sift/server/agents/web/AgentRunController.kt`, `AgentRunDtos.kt` | `/api/v1/agents` REST endpoints and request/response DTOs (`CreateAgentRunRequest`, `CodeReviewRunSpec`, `AgentRunResponse`). |
+| `src/org/sift/server/agents/web/AgentRunController.kt`, `AgentRunDtos.kt` | `/api/v1/agents` REST endpoints and request/response DTOs (`CreateAgentRunRequest`, `UpdateAgentRunRequest`, `CodeReviewRunSpec`, `AgentRunResponse`). |
 | `src/org/sift/server/agents/watch/AgentRunEvent.kt`, `AgentRunEvents.kt` | SSE payload (`AgentRunEvent { type: SNAPSHOT/UPDATED, run }`) and the in-process `SharedFlow` fan-out (no replay, buffer 256, `DROP_OLDEST`). |
 | `src/org/sift/server/agents/watch/PgNotificationConnection.kt`, `PgNotificationListener.kt` | Dedicated non-pooled `LISTEN sift_agent_runs` connection (`application_name=sift-server-watch`) and the single listener coroutine that reloads notified runs and emits `UPDATED`, reconnecting with backoff. |
 | `src/org/sift/server/agents/watch/AgentRunWatchService.kt`, `AgentWatchController.kt` | Snapshot + live-event flow composition (`WatchRequest`) and `GET /api/v1/agents/watch` (`Flow<ServerSentEvent<AgentRunEvent>>`, heartbeats). |
@@ -118,7 +119,7 @@ no access to another module's internals, only declared dependencies) and renders
 | `src/org/sift/server/results/messaging/ReviewResultConsumer.kt` | `@RabbitListener` on `sift.server.code-review.completed` feeding `ReviewResultService.store`. |
 | `src/org/sift/server/results/web/ReviewResultController.kt`, `ReviewResultDtos.kt` | `/api/v1/results` REST endpoints and response DTOs. |
 | `resources/application.yaml` | Default configuration, all secrets/hosts from environment variables; `springdoc.*` (path `/v3/api-docs`, `paths-to-match: /api/**`, ordered keys, `application/json` default, Swagger UI disabled). |
-| `resources/db/migration/` | Flyway migrations (`V1__init.sql`, `V2__users.sql`). |
+| `resources/db/migration/` | Flyway migrations (`V1__init.sql`, `V2__users.sql`, `V3__agent_run_revisions.sql`). |
 | `test/org/sift/server/` | Tests mirror the module packages (`agents/web/AgentRunControllerTest`, `agents/persistence/AgentRunRepositoryTest`, `agents/watch/*`, `results/messaging/ReviewResultConsumerIntegrationTest`, …). `ModularityTest` (Spring Modulith `verify()`, expected module set, documentation rendering; test classes are excluded from the analysis because fixtures are shared across modules). Fixtures: `security/TestSecurityConfiguration` (`@Primary JwtDecoder` decoding base64url JSON claim sets built by `TestTokens.bearer(...)`, plus the MockMvc post-processor `TestTokens.authenticated(...)` — no IdP is contacted, the real filter chain runs), `users/TestUsers`, `PostgresIntegrationTest` (shared `@SpringBootTest` base: singleton Testcontainers Postgres, mocked `KubernetesClient`, random key, consumers and watch listener disabled, test decoder imported), `RabbitMqIntegrationTest` (adds a singleton Testcontainers RabbitMQ and enables the consumers), `agents/watch/WatchIntegrationTest` (listener enabled on a `RANDOM_PORT` server). Coverage: `security/SecurityConfigurationTest` (401 problem + `WWW-Authenticate` without/with rejected token, anonymous probes and `/api/v1/auth/config`), `security/AuthConfigControllerTest`, `users/**` (upsert semantics against Postgres, claim mapping and `sub` fallback, `MeControllerTest`), `ServerEndToEndTest` (`RANDOM_PORT`, consumers + watch on: REST create with bearer → status event → SSE `UPDATED` → completed event → results API and run `SUCCESS`; plus a `401` without token), `ApplicationTest`, `ServerPropertiesTest`, `ApiExceptionHandlerTest`, `repositories/**` (cipher, Secret sync via fabric8 mock server, service with mockk incl. the `RepositoryUsageCheck` veto, `@WebMvcTest` controller, repository against Postgres), `agents/**` (service with mockk incl. `completeWithResult`, `CodeReviewAdapter` via fabric8 mock server, `@WebMvcTest` controller incl. `mine`/`createdBy`, repository against Postgres incl. `created_by` and `hasActiveRuns`, `AgentStatusConsumerIntegrationTest` against Postgres + RabbitMQ, `AgentRunEventsTest`, `AgentWatchControllerTest` driving the `Flow` with a mocked repository, `PgNotificationListenerIntegrationTest` incl. `pg_terminate_backend` reconnect, `AgentWatchSseIntegrationTest` reading the SSE wire format with `java.net.http.HttpClient`), `results/**` (repository against Postgres incl. duplicate `execution_id`, service with a mocked `AgentRunService`, `@WebMvcTest` controller, `ReviewResultConsumerIntegrationTest` against Postgres + RabbitMQ incl. redelivery). `@WebMvcTest` slices import `SecurityConfiguration` + `TestSecurityConfiguration` and mock `UserService`. |
 
 Stack: Spring Boot 4.1.1 (Web MVC, Validation, Actuator, AMQP, Flyway, OAuth2 Resource Server / Spring Security 7;
@@ -159,13 +160,14 @@ once and it is dead-lettered, see [Queues](#queues-and-dead-lettering)).
 
 ## Database schema
 
-Schema is owned by Flyway (`V1__init.sql`, `V2__users.sql`); Exposed never generates DDL.
+Schema is owned by Flyway (`V1__init.sql`, `V2__users.sql`, `V3__agent_run_revisions.sql`); Exposed never
+generates DDL.
 
 | Table | Purpose |
 |---|---|
 | `users` | One row per authenticated identity, keyed by the unique `(issuer, subject)`; `username`, `email`, `created_at`, `last_seen_at` are refreshed from the token on every request (`V2__users.sql`). |
 | `repositories` | Registered repositories; `token_ciphertext`/`token_iv` hold the encrypted access token, `secret_name` the mirrored k8s Secret. |
-| `agent_runs` | One row per agent execution (`kind`, `source`, `phase`, `spec jsonb`, CR identity `cr_name`/`cr_uid`/`generation`, timestamps, nullable `created_by` → `users.id`). Unique on `cr_uid`, indexed by `(phase, created_at desc)` and `(created_by, created_at desc)`. |
+| `agent_runs` | One row per agent execution (`kind`, `source`, `phase`, `spec jsonb`, CR identity `cr_name`/`cr_uid`/`generation`, timestamps, nullable `created_by` → `users.id`, nullable `supersedes_run_id` → `agent_runs.id` `ON DELETE SET NULL`). Unique on `cr_uid`, indexed by `(phase, created_at desc)`, `(created_by, created_at desc)` and `supersedes_run_id` (`V3__agent_run_revisions.sql`). Append-only: revising a run inserts a successor instead of mutating the row (see [ADR 0019](../adrs/0019-immutable-agent-runs-revised-by-succession.md)). |
 | `review_results` | Result per `execution_id` (repository/branch/commit, summary), linked to its `agent_run`. Indexed by `(repository_url, commit_sha)`. |
 | `review_findings` | Findings per result (`file`, line range, `severity`, `category`, `message`, `suggestion`), cascade-deleted with the result. |
 
@@ -384,6 +386,7 @@ the server-side record of one agent execution; for `CODE_REVIEW` it is backed by
 | `POST` | `/` | `CreateAgentRunRequest { kind, repositoryId, branch, baseBranch, commitSha, pullRequest? }` | `202 Accepted`, `Location: /api/v1/agents/{id}`, `AgentRunResponse` with `createdBy` = the caller |
 | `GET` | `/` | query `kind?`, `phase?`, `repositoryId?`, `mine = false`, `createdBy?` (user UUID), `page = 0`, `size = 20` (clamped to 1..200) | `200`, `PageResponse<AgentRunResponse> { items, page, size, total }`, newest first |
 | `GET` | `/{id}` | — | `200`, `AgentRunResponse` |
+| `PUT` | `/{id}` | `UpdateAgentRunRequest { repositoryId, branch, baseBranch, commitSha, pullRequest? }` | `201 Created`, `Location: /api/v1/agents/{successor id}`, `AgentRunResponse` of the **successor** run |
 | `POST` | `/{id}/cancel` | — | `202 Accepted`, `AgentRunResponse` (phase `CANCELLED`) |
 | `DELETE` | `/{id}` | — | `204 No Content` |
 | `GET` | `/watch` | query `agentId?`, `kind?`, `mine = false`, `createdBy?`; header `Last-Event-ID?` | `200`, `text/event-stream` — see [Agent run watch](#agent-run-watch-sse) |
@@ -392,7 +395,9 @@ the server-side record of one agent execution; for `CODE_REVIEW` it is backed by
 (a request to `/watch` without `Accept: text/event-stream` gets `406`, not `400`).
 
 `AgentRunResponse { id, kind, source, repositoryId, crName, crUid, generation, executionId, phase, reason,
-message, spec, createdAt, startedAt, completedAt, updatedAt, createdBy }`. `spec` is the JSON persisted in
+message, spec, createdAt, startedAt, completedAt, updatedAt, createdBy, supersedesRunId, supersededByRunId }`.
+`supersedesRunId` is the persisted predecessor link, `supersededByRunId` the derived reverse lookup; both are
+`null` for a run that was never revised. `spec` is the JSON persisted in
 `agent_runs.spec`: `{ repositoryUrl, branch, baseBranch, commitSha, pullRequest }`. `createdBy` is
 `{ id, username } | null` — the `users` row of the API caller that created the run (`username` is read live
 via a left join, so it follows the user's current claim), `null` for `EXTERNAL` runs and for runs created
@@ -415,10 +420,10 @@ Validation: `branch`/`baseBranch` not blank, `commitSha` must match `^[0-9a-fA-F
 |---|---|
 | `400` | Bean validation failure, unreadable body, malformed UUID/enum in body or query, `mine=true` combined with a different `createdBy`, unknown agent kind adapter. |
 | `404` | Unknown run id; a path `{id}` that is not UUID-shaped (no route matches); unknown `repositoryId` on create. |
-| `409` | Cancel of a run that is already terminal. |
+| `409` | Cancel of a run that is already terminal; revise (`PUT`) of an `EXTERNAL` run, which has no `repositoryId` the server owns. |
 | `500` | Applying the CR failed; the run stays visible with phase `FAILED`, reason `ApplyFailed` and the client exception message. |
 
-### Create, cancel and delete flow
+### Create, revise, cancel and delete flow
 
 1. `AgentRunService.create(request, user)` validates the repository (`RepositoryService.get`), inserts the run as
    `CREATED`/`API` with `crName = cr-<run id>`, `created_by = user.id` and the spec JSON, and commits
@@ -429,7 +434,14 @@ Validation: `branch`/`baseBranch` not blank, `commitSha` must match `^[0-9a-fA-F
    the repository has no token), and `create()`s it. The returned `metadata.uid` is stored as `cr_uid`.
 3. If the apply throws, the run is updated to `FAILED`/`ApplyFailed` in its own transaction and the exception
    is rethrown (→ `500`).
-4. `cancel` (`@Transactional`) rejects terminal runs with `409`, deletes the CR with
+4. `revise` (`AgentRunService.revise(id, request, user)`) loads the predecessor, rejects `EXTERNAL` runs with
+   `409`, and — when the predecessor is still non-terminal — foreground-deletes its `CodeReview` and marks it
+   `CANCELLED`/`SupersededByRevision`; terminal predecessors are left untouched. It then reuses the same
+   persist-then-apply path as `create` with `supersedesRunId = id`. `AgentRunCleanup` is deliberately *not*
+   invoked, so the predecessor keeps its row, `review_results` and findings and stays reviewable via
+   `GET /api/v1/results?agentRunId=`; `delete` remains the only cleanup path
+   (see [ADR 0019](../adrs/0019-immutable-agent-runs-revised-by-succession.md)).
+5. `cancel` (`@Transactional`) rejects terminal runs with `409`, deletes the CR with
    `propagationPolicy=Foreground` (a missing CR is not an error) and sets `CANCELLED`, reason
    `CancelledByUser`, `completedAt = now`.
 

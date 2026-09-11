@@ -10,6 +10,7 @@ import org.sift.server.agents.adapters.AgentKindAdapter
 import org.sift.server.agents.adapters.AppliedResource
 import org.sift.server.agents.persistence.AgentRunRepository
 import org.sift.server.agents.web.CreateAgentRunRequest
+import org.sift.server.agents.web.UpdateAgentRunRequest
 import org.sift.server.api.ConflictException
 import org.sift.server.api.NotFoundException
 import org.sift.server.api.Page
@@ -27,6 +28,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -68,6 +70,13 @@ class AgentRunServiceTest {
         baseBranch = "main",
         commitSha = "a".repeat(SHA_LENGTH),
         pullRequest = "42",
+    )
+    private val updateRequest = UpdateAgentRunRequest(
+        repositoryId = repositoryId,
+        branch = "feature/y",
+        baseBranch = "main",
+        commitSha = "b".repeat(SHA_LENGTH),
+        pullRequest = null,
     )
 
     init {
@@ -337,6 +346,67 @@ class AgentRunServiceTest {
         verify(exactly = 0) { runs.updateStatus(any()) }
         verify(exactly = 0) { runs.update(any()) }
         verify(exactly = 0) { runs.insert(any()) }
+    }
+
+    @Test
+    fun `revise of a terminal run creates a linked successor and keeps the predecessor and its results`() {
+        val predecessor = run(phase = AgentPhase.SUCCESS)
+        every { runs.findById(predecessor.id) } returns predecessor
+        val inserted = slot<AgentRun>()
+        every { runs.insert(capture(inserted)) } answers { inserted.captured }
+        every { adapter.apply(any(), any()) } answers { AppliedResource("cr-${firstArg<AgentRun>().id}", "uid-2") }
+
+        val successor = service.revise(predecessor.id, updateRequest, TestUsers.alice)
+
+        assertNotEquals(predecessor.id, successor.id)
+        assertEquals(predecessor.id, successor.supersedesRunId)
+        assertEquals(AgentPhase.CREATED, inserted.captured.phase)
+        assertEquals(RunSource.API, inserted.captured.source)
+        assertEquals("feature/y", inserted.captured.spec["branch"].asString())
+        assertEquals("uid-2", successor.crUid)
+        // a terminal predecessor is left exactly as it is: no CR deletion, no status change, no cleanup
+        verify(exactly = 0) { adapter.delete(any()) }
+        verify(exactly = 0) { cleanup.deleteForRun(any()) }
+        verify(exactly = 0) { runs.delete(any()) }
+        verify(exactly = 1) { runs.update(successor) }
+    }
+
+    @Test
+    fun `revise of an active run deletes its CR and marks it superseded without cleaning up its results`() {
+        val predecessor = run(phase = AgentPhase.RUNNING)
+        every { runs.findById(predecessor.id) } returns predecessor
+        every { adapter.delete(predecessor) } returns Unit
+        val updated = mutableListOf<AgentRun>()
+        every { runs.update(capture(updated)) } answers { updated.last() }
+        every { adapter.apply(any(), any()) } answers { AppliedResource("cr-${firstArg<AgentRun>().id}", "uid-2") }
+
+        val successor = service.revise(predecessor.id, updateRequest, TestUsers.alice)
+
+        val cancelled = updated.first()
+        assertEquals(predecessor.id, cancelled.id)
+        assertEquals(AgentPhase.CANCELLED, cancelled.phase)
+        assertEquals(AgentRunService.REASON_SUPERSEDED, cancelled.reason)
+        assertEquals(OffsetDateTime.now(clock), cancelled.completedAt)
+        assertEquals(predecessor.id, successor.supersedesRunId)
+        verify(exactly = 1) { adapter.delete(predecessor) }
+        verify(exactly = 0) { cleanup.deleteForRun(any()) }
+        verify(exactly = 0) { runs.delete(any()) }
+    }
+
+    @Test
+    fun `revise rejects EXTERNAL runs with a conflict and unknown ids are not found`() {
+        val external = run(phase = AgentPhase.SUCCESS).copy(source = RunSource.EXTERNAL, repositoryId = null)
+        every { runs.findById(external.id) } returns external
+        assertFailsWith<ConflictException> { service.revise(external.id, updateRequest, TestUsers.alice) }
+
+        val missing = UUID.randomUUID()
+        every { runs.findById(missing) } returns null
+        assertFailsWith<NotFoundException> { service.revise(missing, updateRequest, TestUsers.alice) }
+
+        verify(exactly = 0) { adapter.delete(any()) }
+        verify(exactly = 0) { adapter.apply(any(), any()) }
+        verify(exactly = 0) { runs.insert(any()) }
+        verify(exactly = 0) { cleanup.deleteForRun(any()) }
     }
 
     private fun run(phase: AgentPhase, generation: Long? = 1, observedAt: Instant? = null): AgentRun {
